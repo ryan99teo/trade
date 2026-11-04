@@ -52,6 +52,30 @@ def write_log(settings, *, side, candle, verdict, state, final_action, threshold
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+def read_log(settings, limit=50):
+    """Newest-first JSON records for the Web UI. Skips corrupt lines; never returns secrets."""
+    if limit <= 0:
+        return []
+    path = log_path(settings)
+    if not path.exists():
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    records = []
+    for line in lines[-limit:]:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    records.reverse()
+    return records
+
+
 def build_state(side, reason, settings, mark, cash, btc, equity, baseline, candles, buy_halted):
     mark = Decimal(mark)
     equity = Decimal(equity)

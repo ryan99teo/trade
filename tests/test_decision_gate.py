@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 from urllib.error import HTTPError, URLError
 
 from trade.config import Settings
-from trade.decision_gate import DecisionGate, GateVerdict, build_state, log_path
+from trade.decision_gate import DecisionGate, GateVerdict, build_state, log_path, read_log, write_log
 from trade.engine import Engine
 from trade.storage import Store, fingerprint
 from test_trading import NOW, snapshot
@@ -110,6 +110,21 @@ class DecisionGateUnitTests(unittest.TestCase):
         off = replace(self.settings, decision_gate_enabled=False, openrouter_api_key="",
                       decision_threshold_buy=D("0.1"))
         self.assertEqual(fingerprint(on), fingerprint(off))
+
+    def test_read_log_returns_newest_first_without_secrets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = replace(self.settings, db_path=Path(tmp)/"paper.sqlite3")
+            self.assertEqual(read_log(settings), [])
+            for noul in (0.2, 0.9):
+                write_log(settings, side="buy", candle="c"+str(noul),
+                          verdict=GateVerdict(proceed=noul >= 0.75, noul=noul, detail="ok"),
+                          state={"signal_reason": "x", "mark_krw": "1", "btc_ratio": "0",
+                                 "daily_pnl_pct": 0}, final_action="hold" if noul < 0.75 else "buy")
+            rows = read_log(settings, limit=1)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["noul"], 0.9)
+            self.assertNotIn("api_key", json.dumps(rows))
+            self.assertNotIn("secret", json.dumps(rows).lower())
 
 
 class DecisionGateEngineTests(unittest.TestCase):

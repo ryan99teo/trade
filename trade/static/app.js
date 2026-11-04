@@ -10,6 +10,11 @@ function renderLogs(id, rows, decision) {
   const el=$(id); if(!rows.length) { empty(el,'아직 기록이 없습니다.'); return; }
   el.replaceChildren(...rows.map(row=>{const p=document.createElement('p'),t=document.createElement('time'),b=document.createElement('strong');t.textContent=time(row.time);b.textContent=decision?({buy:'매수 신호',sell:'매도 신호',hold:'대기'}[row.action]):row.kind;p.append(t,b,document.createTextNode(decision?row.reason:row.message));return p;}));
 }
+function renderGateLogs(id, logs) {
+  const el=$(id); if(!el) return;
+  if(!logs||!logs.length){empty(el,'아직 게이트 호출 기록이 없습니다. 매수·매도 신호가 날 때 JSON이 쌓입니다.');return;}
+  el.replaceChildren(...logs.map(row=>{const pre=document.createElement('pre');pre.textContent=JSON.stringify(row,null,2);return pre;}));
+}
 function chart() {
   const c=$('chart'), ratio=window.devicePixelRatio||1, width=c.clientWidth, height=170;
   c.width=width*ratio;c.height=height*ratio;const ctx=c.getContext('2d');ctx.scale(ratio,ratio);
@@ -32,7 +37,8 @@ function render(s) {
   $('settings').replaceChildren(...pairs.map(([key,value])=>{const div=document.createElement('div'),dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=key;dd.textContent=value;div.append(dt,dd);return div;}));
   const fills=$('fills');fills.replaceChildren(...s.fills.map(f=>{const tr=document.createElement('tr');[time(f.time),f.side==='buy'?'매수':'매도',won(f.price),Number(f.quantity).toFixed(8),won(f.fee),won(f.realized_pnl)].forEach(v=>{const td=document.createElement('td');td.textContent=v;tr.append(td);});return tr;}));
   if(!s.fills.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=6;td.className='empty';td.textContent='아직 체결이 없습니다. 거래 시작 후 선택한 전략의 매매 조건을 기다립니다.';tr.append(td);fills.append(tr);}
-  renderLogs('decisions',s.decisions,true);renderLogs('events',s.events,false);history=s.history;chart();
+  renderLogs('decisions',s.decisions,true);renderLogs('events',s.events,false);
+  renderGateLogs('decision-gate-logs',(s.decision_gate||{}).logs);history=s.history;chart();
   if(s.last_error){marketError=true;$('notice').textContent=s.last_error+' 정상 시세 수신 후 거래 시작을 눌러 재개하세요.';$('notice').classList.add('error');}
   else if(marketError){marketError=false;$('notice').textContent='시세 수신이 복구되었습니다. 거래 시작을 눌러 재개할 수 있습니다.';$('notice').classList.remove('error');}
   window.currentTradeStatus=s;document.dispatchEvent(new CustomEvent('trade-status',{detail:s}));

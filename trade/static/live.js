@@ -57,7 +57,9 @@
       const tr=document.createElement('tr');for(const value of [time(order.created_at),order.side==='buy'?'매수':'매도',states[order.state]||order.state,Number(order.quantity).toFixed(8),won(order.funds),won(order.fee)]){const td=document.createElement('td');td.textContent=value;tr.append(td);}
       const td=document.createElement('td');if(active.has(order.state)){const button=document.createElement('button');button.textContent='취소 요청';button.disabled=busy;button.addEventListener('click',()=>perform('orders/'+encodeURIComponent(order.identifier)+'/cancel',{}));td.append(button);}if(order.last_error){const p=document.createElement('small');p.textContent=order.last_error;td.append(p);}tr.append(td);return tr;
     }));
-    if(!data.orders.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=7;td.className='empty';td.textContent='실제 주문 내역이 없습니다.';tr.append(td);get('real-orders').append(tr);}controls();
+    if(!data.orders.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=7;td.className='empty';td.textContent='실제 주문 내역이 없습니다.';tr.append(td);get('real-orders').append(tr);}
+    if(typeof renderGateLogs==='function')renderGateLogs('real-decision-gate-logs',(data.decision_gate||{}).logs);
+    controls();
   }
   async function refresh(){if(busy)return;try{show(await api('status'));}catch(error){get('real-message').textContent=error.message;current=null;controls();}}
   async function perform(path,body){

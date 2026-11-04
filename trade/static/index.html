@@ -26,6 +26,7 @@
   <section class="panel"><h3>운영 규칙</h3><dl id="settings"></dl><p class="muted">손실 한도 도달 시 신규 매수를 중지합니다. 매도 신호는 계속 처리하며, 재시작 후에는 거래 정지 상태로 열립니다.</p></section></div>
   <section class="panel"><div class="panel-head"><h3>모의 체결</h3><span>최근 100건</span></div><div class="scroll"><table><thead><tr><th>시각 (한국)</th><th>방향</th><th>체결가</th><th>BTC 수량</th><th>수수료</th><th>실현 손익</th></tr></thead><tbody id="fills"></tbody></table></div></section>
   <section class="panel"><h3>전략 판단</h3><p class="muted">확정 캔들마다 한 번 판단합니다. 확정 후 2분이 지난 신호는 건너뜁니다.</p><div id="decisions" class="log"></div></section>
+  <section class="panel"><div class="panel-head"><h3>디시젼 게이트 로그</h3><span>최근 50건 · JSON</span></div><p class="muted">매수·매도 신호에서 게이트가 호출된 기록입니다. API 키는 포함되지 않습니다.</p><div id="decision-gate-logs" class="log json-log"></div></section>
   <section class="panel"><h3>운영 기록</h3><div id="events" class="log"></div></section>
   </section>
   <section id="backtest-view" hidden>
@@ -108,6 +109,9 @@
         </fieldset>
         <div class="bt-actions"><button id="decision-gate-save" type="submit" class="primary" disabled>게이트 설정 저장</button><button id="decision-gate-reset" type="button">수정 취소</button><p id="decision-gate-message" role="status">현재 설정을 불러오고 있습니다.</p></div>
       </form>
+      <div class="panel-head" style="margin-top:20px"><h3>게이트 JSON 로그</h3><span>모의매매 · 최근 50건</span></div>
+      <p class="muted">파일 로그와 동일합니다. 매수·매도 신호가 게이트를 통과할 때만 쌓입니다.</p>
+      <div id="strategy-decision-gate-logs" class="log json-log"></div>
     </section>
     <section class="panel"><div class="panel-head"><h3>텔레그램 알림</h3><span id="telegram-state">상태 확인 중</span></div>
       <p class="muted">모의 체결 · 손실 한도 도달 · 시세 수집 장애 및 복구를 알립니다.</p>
@@ -163,6 +167,9 @@
         </fieldset>
         <div class="bt-actions"><button id="real-decision-gate-save" type="submit" class="primary" disabled>게이트 설정 저장</button><button id="real-decision-gate-reset" type="button">수정 취소</button><p id="real-decision-gate-message" class="muted" role="status"></p></div>
       </form>
+      <div class="panel-head" style="margin-top:20px"><h3>게이트 JSON 로그</h3><span>실거래 · 최근 50건</span></div>
+      <p class="muted">실거래 DB와 같은 이름의 로그 파일입니다. API 키는 포함되지 않습니다.</p>
+      <div id="real-decision-gate-logs" class="log json-log"></div>
     </section>
     <section class="panel"><h3>실거래 주문 내역</h3><div class="scroll"><table><thead><tr><th>시각 (한국)</th><th>방향</th><th>상태</th><th>누적 체결 BTC</th><th>누적 금액</th><th>수수료</th><th>확인 / 취소</th></tr></thead><tbody id="real-orders"></tbody></table></div></section>
     <section class="panel"><h3>실거래 적용 기준</h3><ul class="muted"><li>가격 범위를 둔 지정가 IOC입니다. 미체결 잔량은 취소되며 실제 체결된 수량만 기록합니다.</li><li>접수 여부가 불명확한 주문은 자동으로 다시 보내지 않습니다. 업비트 주문 내역과 이 화면의 상태를 확인하세요.</li><li>기존 보유 BTC와 모의 잔고를 실거래 매도 대상으로 사용하지 않습니다.</li><li>재시작하면 실거래는 정지 상태이며, 기존 주문 조회와 체결 동기화만 재개합니다.</li></ul></section>

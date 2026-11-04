@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 from .market import UTC
 from .config import EDITABLE_FIELDS, coerce_setting
-from .decision_gate import DecisionGate, build_state, write_log as write_gate_log
+from .decision_gate import DecisionGate, build_state, read_log as read_gate_log, write_log as write_gate_log
 from .strategy import moving_average_cross, allocation_signal
 
 SATOSHI = Decimal("0.00000001")
@@ -235,7 +235,8 @@ class Engine:
                                   "threshold_buy": str(s.decision_threshold_buy),
                                   "threshold_sell": str(s.decision_threshold_sell),
                                   "timeout_seconds": s.decision_timeout_seconds,
-                                  "configured": bool(s.openrouter_api_key.strip())},
+                                  "configured": bool(s.openrouter_api_key.strip()),
+                                  "logs": read_gate_log(s, 50)},
                 "settings": {"initial_cash": str(s.initial_cash), "order_krw": str(s.order_krw),
                              "max_exposure": str(s.max_exposure), "daily_loss_limit": str(s.daily_loss_limit),
                              "fee_rate": str(s.fee_rate), "slippage": str(s.slippage),

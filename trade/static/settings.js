@@ -23,6 +23,7 @@
     if(initial)notify(current.running?'실시간 화면에서 거래를 정지한 뒤 수정하세요.':'설정을 수정하고 저장하세요. 거래는 정지 상태로 유지됩니다.');
     const cfg=current.settings,pairs=[['초기 가상 자금',won(cfg.initial_cash)],['캔들 단위',cfg.candle_minutes+'분봉'],['수집 주기',cfg.poll_seconds+'초'],['가정 수수료 / 슬리피지',Number(cfg.fee_rate)*100+'% / '+Number(cfg.slippage)*100+'%']];
     document.getElementById('strategy-fixed').replaceChildren(...pairs.map(([key,value])=>{const div=document.createElement('div'),dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=key;dd.textContent=value;div.append(dt,dd);return div;}));
+    if(typeof renderGateLogs==='function')renderGateLogs('strategy-decision-gate-logs',(current.decision_gate||{}).logs);
   });
   document.addEventListener('trade-disconnected',()=>{online=false;controls();notify('서버에 연결할 수 없습니다. 연결 복구 후 저장하세요.',true);});
   form.addEventListener('input',()=>{dirty=true;controls();notify('저장하지 않은 변경 사항이 있습니다.');});

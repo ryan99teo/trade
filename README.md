@@ -188,6 +188,7 @@ BTC 비중은 0% 초과·100% 이하, 일일 손실 한도는 0% 초과·100% �
 - 설정은 계좌 DB의 전략 오버라이드에 저장되며, 계정 fingerprint에는 넣지 않아 기존 DB를 유지한 채 켜고 끌 수 있습니다.
 - 게이트가 실제로 호출될 때마다 계좌 DB와 같은 폴더에 JSONL 로그를 남깁니다.
   예: `data/trade-decision-gate.log`, 실거래는 `data/trade-live-decision-gate.log`.
+  웹 UI(모의·전략·실거래)에서도 최근 50건 JSON을 같은 내용으로 볼 수 있습니다.
   한 줄에 시각·캔들·방향·noul·임계값·진행 여부·최종 action을 기록하며 API 키는 넣지 않습니다.
 
 ## 설정
