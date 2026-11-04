@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BTC · 개인 모의매매</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+<main>
+  <header><div><p class="eyebrow">PERSONAL TRADING DESK</p><h1>Bitcoin <span>KRW-BTC</span></h1></div><span class="badge">모의매매 전용</span></header>
+  <section class="toolbar"><div><span id="indicator" class="dot"></span><strong id="status">연결 중</strong><p id="updated">업비트 시세를 기다리고 있습니다.</p></div><div class="buttons"><button data-action="start" class="primary">거래 시작</button><button data-action="stop">거래 정지</button><button id="buy-toggle" data-action="pause_buys">신규 매수 중지</button></div></section>
+  <p id="notice" role="status">실제 주문과 자금 이동은 발생하지 않습니다. 시작 버튼을 누르면 가상 계좌로 거래합니다.</p>
+  <section class="metrics">
+    <article><p>총 평가 자산</p><h2 id="equity">—</h2><small>가상 원화 + BTC 평가액</small></article>
+    <article><p>총 손익</p><h2 id="pnl">—</h2><small id="pnl-detail">수수료·슬리피지 반영</small></article>
+    <article><p>가상 원화 잔고</p><h2 id="cash">—</h2><small id="btc">BTC —</small></article>
+    <article><p>비트코인 현재가</p><h2 id="price">—</h2><small id="daily">당일 손익 —</small></article>
+  </section>
+  <div class="columns"><section class="panel"><div class="panel-head"><h3>자산 흐름</h3><span>최근 240회 관측</span></div><canvas id="chart" aria-label="가상 자산 평가액 추이" role="img"></canvas><p class="muted">관측 시점의 평가액입니다. 매매 성과 검증을 위한 백테스트 결과가 아닙니다.</p></section>
+  <section class="panel"><h3>운영 규칙</h3><dl id="settings"></dl><p class="muted">손실 한도 도달 시 신규 매수를 중지합니다. 매도 신호는 계속 처리하며, 재시작 후에는 거래 정지 상태로 열립니다.</p></section></div>
+  <section class="panel"><div class="panel-head"><h3>모의 체결</h3><span>최근 100건</span></div><div class="scroll"><table><thead><tr><th>시각 (한국)</th><th>방향</th><th>체결가</th><th>BTC 수량</th><th>수수료</th><th>실현 손익</th></tr></thead><tbody id="fills"></tbody></table></div></section>
+  <section class="panel"><h3>전략 판단</h3><p class="muted">확정 캔들마다 한 번 판단합니다. 확정 후 2분이 지난 신호는 건너뜁니다.</p><div id="decisions" class="log"></div></section>
+  <section class="panel"><h3>운영 기록</h3><div id="events" class="log"></div></section>
+  <footer>업비트 공개 시세 · 가상 체결 · 계정 API 키 불필요</footer>
+</main>
+</body></html>
