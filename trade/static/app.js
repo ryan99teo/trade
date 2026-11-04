@@ -33,10 +33,11 @@ function render(s) {
   renderLogs('decisions',s.decisions,true);renderLogs('events',s.events,false);history=s.history;chart();
   if(s.last_error){marketError=true;$('notice').textContent=s.last_error+' 정상 시세 수신 후 거래 시작을 눌러 재개하세요.';$('notice').classList.add('error');}
   else if(marketError){marketError=false;$('notice').textContent='시세 수신이 복구되었습니다. 거래 시작을 눌러 재개할 수 있습니다.';$('notice').classList.remove('error');}
+  window.currentTradeStatus=s;document.dispatchEvent(new CustomEvent('trade-status',{detail:s}));
 }
-async function refresh(){if(busy)return;try{const r=await fetch('/api/status');if(!r.ok)throw new Error('상태 조회 실패');render(await r.json());}catch(e){$('status').textContent='서버 연결 끊김';$('notice').textContent=e.message;$('notice').classList.add('error');}}
+async function refresh(){if(busy)return;try{const r=await fetch('/api/status');if(!r.ok)throw new Error('상태 조회 실패');render(await r.json());}catch(e){$('status').textContent='서버 연결 끊김';$('notice').textContent=e.message;$('notice').classList.add('error');document.dispatchEvent(new CustomEvent('trade-disconnected'));}}
 document.querySelectorAll('button[data-action]').forEach(button=>button.addEventListener('click',async()=>{
-  if(busy)return;busy=true;document.querySelectorAll('button').forEach(b=>b.disabled=true);
-  try{const response=await fetch('/api/control/'+button.dataset.action,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}),data=await response.json();if(!response.ok)throw new Error(data.detail||'명령 처리 실패');$('notice').textContent='설정을 적용했습니다. 실제 주문은 발생하지 않습니다.';$('notice').classList.remove('error');render(data);}catch(e){$('notice').textContent=e.message;$('notice').classList.add('error');}finally{busy=false;document.querySelectorAll('button').forEach(b=>b.disabled=false);await refresh();}
+  if(busy)return;busy=true;document.querySelectorAll('button[data-action]').forEach(b=>b.disabled=true);
+  try{const response=await fetch('/api/control/'+button.dataset.action,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}),data=await response.json();if(!response.ok)throw new Error(data.detail||'명령 처리 실패');$('notice').textContent='설정을 적용했습니다. 실제 주문은 발생하지 않습니다.';$('notice').classList.remove('error');render(data);}catch(e){$('notice').textContent=e.message;$('notice').classList.add('error');}finally{busy=false;document.querySelectorAll('button[data-action]').forEach(b=>b.disabled=false);await refresh();}
 }));
 window.addEventListener('resize',chart);refresh();setInterval(refresh,5000);

@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta
+from dataclasses import replace
 from decimal import Decimal, ROUND_DOWN
 from zoneinfo import ZoneInfo
 
 from .market import UTC
+from .config import EDITABLE_FIELDS
 from .strategy import moving_average_cross
 
 SATOSHI = Decimal("0.00000001")
@@ -10,12 +12,21 @@ SATOSHI = Decimal("0.00000001")
 
 class Engine:
     def __init__(self, settings, store):
-        self.settings = settings
+        self.settings = store.settings
         self.store = store
         self.running = False
         self.last_error = None
         self.last_received = None
         self.quote_time = None
+
+    def configure(self, changes, now=None):
+        if self.running:
+            raise RuntimeError("거래를 먼저 정지한 뒤 설정을 저장하세요.")
+        if not changes or not set(changes) <= set(EDITABLE_FIELDS):
+            raise ValueError("변경 가능한 전략 설정을 확인하세요.")
+        settings = replace(self.settings, **changes)
+        self.store.save_strategy(settings, (now or datetime.now(UTC)).isoformat())
+        self.settings = settings
 
     def equity(self, price):
         return self.store.number("cash") + self.store.number("btc") * price

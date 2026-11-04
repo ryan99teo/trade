@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 
+EDITABLE_FIELDS = ("short_window", "long_window", "order_krw", "max_exposure", "daily_loss_limit")
+
 
 @dataclass(frozen=True)
 class Settings:

@@ -5,10 +5,14 @@
   <title>BTC · 개인 모의매매</title>
   <link rel="stylesheet" href="/static/style.css">
   <script src="/static/app.js" defer></script>
+  <script src="/static/backtest.js" defer></script>
+  <script src="/static/settings.js" defer></script>
 </head>
 <body>
 <main>
   <header><div><p class="eyebrow">PERSONAL TRADING DESK</p><h1>Bitcoin <span>KRW-BTC</span></h1></div><span class="badge">모의매매 전용</span></header>
+  <nav class="tabs" aria-label="거래 화면 선택"><button id="live-tab" aria-pressed="true" data-view="live">실시간 모의매매</button><button id="backtest-tab" aria-pressed="false" data-view="backtest">백테스트 · 성과 분석</button><button id="strategy-tab" aria-pressed="false" data-view="strategy">전략 설정</button></nav>
+  <section id="live-view">
   <section class="toolbar"><div><span id="indicator" class="dot"></span><strong id="status">연결 중</strong><p id="updated">업비트 시세를 기다리고 있습니다.</p></div><div class="buttons"><button data-action="start" class="primary">거래 시작</button><button data-action="stop">거래 정지</button><button id="buy-toggle" data-action="pause_buys">신규 매수 중지</button></div></section>
   <p id="notice" role="status">실제 주문과 자금 이동은 발생하지 않습니다. 시작 버튼을 누르면 가상 계좌로 거래합니다.</p>
   <section class="metrics">
@@ -22,6 +26,68 @@
   <section class="panel"><div class="panel-head"><h3>모의 체결</h3><span>최근 100건</span></div><div class="scroll"><table><thead><tr><th>시각 (한국)</th><th>방향</th><th>체결가</th><th>BTC 수량</th><th>수수료</th><th>실현 손익</th></tr></thead><tbody id="fills"></tbody></table></div></section>
   <section class="panel"><h3>전략 판단</h3><p class="muted">확정 캔들마다 한 번 판단합니다. 확정 후 2분이 지난 신호는 건너뜁니다.</p><div id="decisions" class="log"></div></section>
   <section class="panel"><h3>운영 기록</h3><div id="events" class="log"></div></section>
+  </section>
+  <section id="backtest-view" hidden>
+    <section class="panel">
+      <div class="panel-head"><h3>과거 데이터로 전략 검증</h3><span>KRW-BTC · 확정 1시간봉</span></div>
+      <p class="muted">한국시간 기준 최대 365일, 어제까지 선택할 수 있습니다. 준비 구간을 추가 수집하고 다음 봉 시가에 가상 체결합니다.</p>
+      <form id="bt-form">
+        <div class="bt-fields">
+          <label>시작일<input name="start_date" id="bt-start" type="date" required></label>
+          <label>종료일 (포함)<input name="end_date" id="bt-end" type="date" required></label>
+          <label>초기 자금 (원)<input name="initial_cash" type="number" min="5000" max="100000000000" step="1" value="1000000" required></label>
+          <label>1회 매수 금액 (원)<input name="order_krw" type="number" min="5000" step="1" value="100000" required></label>
+          <label>단기 이동평균 (봉)<input name="short_window" type="number" min="1" max="198" step="1" value="5" required></label>
+          <label>장기 이동평균 (봉)<input name="long_window" type="number" min="2" max="199" step="1" value="20" required></label>
+          <label>편도 수수료 (%)<input name="fee_rate" type="number" min="0" max="9.99" step="0.001" value="0.05" required></label>
+          <label>편도 슬리피지 (%)<input name="slippage" type="number" min="0" max="9.99" step="0.001" value="0.1" required></label>
+          <label>최대 BTC 비중 (%)<input name="max_exposure" type="number" min="0.01" max="100" step="0.01" value="30" required></label>
+          <label>일일 손실 한도 (%)<input name="daily_loss_limit" type="number" min="0.01" max="99.99" step="0.01" value="3" required></label>
+        </div>
+        <div class="bt-actions"><button id="bt-run" type="submit" class="primary">백테스트 실행</button><p id="bt-message" role="status">모의계좌 잔고와 실행 상태에 영향을 주지 않습니다.</p></div>
+      </form>
+    </section>
+    <section class="panel"><div class="bt-history"><label for="bt-history">저장된 결과</label><select id="bt-history"><option value="">실행 결과를 선택하세요</option></select><a id="bt-csv" hidden>거래 내역 CSV 다운로드</a></div></section>
+    <div id="bt-result" hidden>
+      <p id="bt-period" class="muted"></p>
+      <section class="metrics bt-metrics">
+        <article><p>전략 수익률</p><h2 id="bt-return">—</h2><small id="bt-pnl">—</small></article>
+        <article><p>최대 낙폭 (MDD)</p><h2 id="bt-mdd">—</h2><small>시가·체결 직후·종가 관측 기준</small></article>
+        <article><p>청산 거래 승률</p><h2 id="bt-win">—</h2><small id="bt-trades">—</small></article>
+        <article><p>BTC 단순 보유 수익률</p><h2 id="bt-benchmark">—</h2><small id="bt-excess">—</small></article>
+      </section>
+      <section class="panel bt-chart-panel"><div class="panel-head"><h3>자산 추이 비교</h3><span><i class="legend strategy"></i>전략 <i class="legend benchmark"></i>BTC 단순 보유</span></div><canvas id="bt-chart" role="img" aria-label="전략과 BTC 단순 보유 평가 자산 비교"></canvas><p id="bt-hover" class="muted">그래프 위에 마우스를 올리면 해당 시점의 자산을 확인할 수 있습니다.</p></section>
+      <section class="panel"><h3>전략 낙폭 추이</h3><canvas id="bt-drawdown" role="img" aria-label="전략 평가 자산의 최고점 대비 낙폭"></canvas></section>
+      <section class="panel"><h3>성과 상세</h3><dl id="bt-details"></dl></section>
+      <section class="panel"><div class="panel-head"><h3>백테스트 체결 내역</h3><span id="bt-fill-count"></span></div><div class="scroll"><table><thead><tr><th>시각 (한국)</th><th>방향</th><th>체결가</th><th>BTC 수량</th><th>수수료</th><th>실현 손익</th></tr></thead><tbody id="bt-fills"></tbody></table></div><p class="muted">화면에는 최근 100건을 표시합니다. 전체 내역은 CSV로 다운로드할 수 있습니다.</p></section>
+      <section class="panel"><h3>계산 기준과 한계</h3><ul id="bt-notes" class="muted"></ul></section>
+    </div>
+  </section>
+  <section id="strategy-view" hidden>
+    <section class="panel">
+      <div class="panel-head"><h3>실시간 모의매매 전략 설정</h3><span id="strategy-state">상태 확인 중</span></div>
+      <p class="muted">이동평균 교차 전략의 매매 조건과 자금 한도를 변경합니다. 거래를 정지한 뒤 저장할 수 있으며, 저장 후 거래는 자동으로 시작되지 않습니다.</p>
+      <form id="strategy-form">
+        <fieldset id="strategy-fields" disabled>
+          <div class="bt-fields">
+            <label>단기 이동평균 (봉)<input name="short_window" type="number" min="1" max="198" step="1" required></label>
+            <label>장기 이동평균 (봉)<input name="long_window" type="number" min="2" max="199" step="1" required></label>
+            <label>1회 매수 금액 (원)<input name="order_krw" type="number" min="5000" step="1" required></label>
+            <label>최대 BTC 비중 (%)<input name="max_exposure" type="number" min="0.01" max="100" step="0.01" required></label>
+            <label>일일 손실 한도 (%)<input name="daily_loss_limit" type="number" min="0.01" max="99.99" step="0.01" required></label>
+          </div>
+        </fieldset>
+        <div class="bt-actions"><button id="strategy-save" type="submit" class="primary" disabled>설정 저장</button><button id="strategy-reset" type="button">수정 취소</button><p id="strategy-message" role="status">현재 설정을 불러오고 있습니다.</p></div>
+      </form>
+    </section>
+    <section class="panel"><h3>설정 적용 기준</h3><dl id="strategy-fixed"></dl><ul class="muted">
+      <li>저장한 설정은 서버를 재시작해도 유지됩니다. 백테스트 입력값은 별도로 관리합니다.</li>
+      <li>원화·BTC 잔고, 기존 체결, 일일 손실 기준 자산은 그대로 유지합니다.</li>
+      <li>보유 한도를 낮춰도 기존 BTC를 강제로 매도하지 않습니다. 이후 매수에 새 한도를 적용합니다.</li>
+      <li>이미 판단한 캔들은 설정을 바꿔도 다시 거래하지 않습니다. 새 캔들에서 변경된 전략을 사용합니다.</li>
+      <li>신규 매수 중지 상태는 설정 저장으로 해제되지 않습니다. 실시간 화면에서 별도로 재개하세요.</li>
+    </ul></section>
+  </section>
   <footer>업비트 공개 시세 · 가상 체결 · 계정 API 키 불필요</footer>
 </main>
 </body></html>

@@ -3,22 +3,37 @@ import fcntl
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from decimal import Decimal
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, ConfigDict, Field
 
 from .config import Settings
 from .engine import Engine
 from .market import MarketError, UpbitPublic
 from .storage import Store
+from .backtest import BacktestRequest, fills_csv, read_archive, run_backtest
 
 log = logging.getLogger(__name__)
 
 
-def create_app(settings=None, market=None):
+class StrategyUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    short_window: int = Field(ge=1, le=198, strict=True)
+    long_window: int = Field(ge=2, le=199, strict=True)
+    order_krw: Decimal = Field(ge=5000)
+    max_exposure: Decimal = Field(gt=0, le=1)
+    daily_loss_limit: Decimal = Field(gt=0, lt=1)
+
+
+def create_app(settings=None, market=None, history_market=None):
     settings = settings or Settings.from_env()
     market = market or UpbitPublic()
+    history_market = history_market or UpbitPublic()
+    archive_path = settings.db_path.with_name(settings.db_path.stem + "-backtests.sqlite3")
+    backtest_lock = asyncio.Lock()
 
     async def collect(engine):
         while True:
@@ -99,5 +114,48 @@ def create_app(settings=None, market=None):
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return app.state.engine.status()
+
+    @app.post("/api/settings")
+    async def save_settings(request: StrategyUpdate):
+        try:
+            app.state.engine.configure(request.model_dump())
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return app.state.engine.status()
+
+    @app.get("/api/backtests")
+    async def backtests():
+        return {"running": backtest_lock.locked(), "runs": await asyncio.to_thread(read_archive, archive_path)}
+
+    @app.post("/api/backtests")
+    async def backtest(request: BacktestRequest):
+        try:
+            request.bounds()
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if backtest_lock.locked():
+            raise HTTPException(status_code=409, detail="다른 백테스트가 실행 중입니다. 완료 후 다시 실행하세요.")
+        async with backtest_lock:
+            try:
+                return await asyncio.to_thread(run_backtest, archive_path, history_market, request)
+            except MarketError as exc:
+                raise HTTPException(status_code=503, detail=str(exc) + " 잠시 후 다시 실행하세요.") from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/backtests/{run_id}")
+    async def backtest_result(run_id: str):
+        result = await asyncio.to_thread(read_archive, archive_path, run_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="백테스트 결과를 찾을 수 없습니다.")
+        return result
+
+    @app.get("/api/backtests/{run_id}/trades.csv")
+    async def backtest_csv(run_id: str):
+        result = await backtest_result(run_id)
+        return Response(fills_csv(result), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": 'attachment; filename="backtest-{}.csv"'.format(result["id"])})
 
     return app

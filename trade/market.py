@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import List
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from urllib.parse import urlencode
 
 UTC = timezone.utc
 
@@ -52,7 +53,11 @@ class UpbitPublic:
 
     def fetch(self, minutes):
         # One request per group every >=10s, far below the public API limits.
-        rows = self._get("candles/minutes/{}?market=KRW-BTC&count=200".format(minutes))
+        requested_at = datetime.now(UTC)
+        epoch = int(requested_at.timestamp())
+        boundary = datetime.fromtimestamp(epoch - epoch % (minutes * 60), UTC)
+        query = urlencode({"market": "KRW-BTC", "count": 200, "to": boundary.isoformat()})
+        rows = self._get("candles/minutes/{}?{}".format(minutes, query))
         tickers = self._get("ticker?markets=KRW-BTC")
         try:
             ticker = tickers[0]
