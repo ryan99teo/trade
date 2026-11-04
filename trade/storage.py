@@ -8,6 +8,7 @@ from decimal import Decimal
 
 from .config import (EDITABLE_FIELDS, FINGERPRINT_EXCLUDE, NEW_STRATEGY_FIELDS, STRATEGY_NAMES,
                      Settings, coerce_setting)
+from .market import Candle
 
 
 def fingerprint(settings):
@@ -145,3 +146,13 @@ class Store:
         if table not in ("decisions", "fills", "events", "equity"):
             raise ValueError("Unknown table")
         return [dict(r) for r in self.db.execute("SELECT * FROM {} ORDER BY rowid DESC LIMIT ?".format(table), (limit,))]
+
+    def candle_count(self):
+        return int(self.db.execute("SELECT COUNT(*) FROM candles").fetchone()[0])
+
+    def recent_candles(self, limit):
+        rows = self.db.execute(
+            "SELECT time, close FROM candles ORDER BY time DESC LIMIT ?", (max(int(limit), 0),)
+        ).fetchall()
+        return [Candle(datetime.fromisoformat(row["time"]), Decimal(row["close"]))
+                for row in reversed(rows)]

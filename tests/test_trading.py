@@ -9,7 +9,7 @@ from trade.config import Settings
 from trade.engine import Engine
 from trade.market import Candle, Snapshot, UTC
 from trade.storage import Store
-from trade.strategy import moving_average_cross
+from trade.strategy import moving_average_cross, moving_average_state
 
 D = Decimal
 NOW = datetime(2026, 11, 4, 3, 0, 30, tzinfo=UTC)
@@ -38,6 +38,16 @@ class TradingTests(unittest.TestCase):
 
     def test_cross_uses_previous_and_current_closed_bars(self):
         self.assertEqual(moving_average_cross(snapshot().candles, 2, 3, 60)[0], "buy")
+
+    def test_status_exposes_moving_average_readiness(self):
+        self.assertFalse(self.engine.status()["moving_average"]["ready"])
+        self.start()
+        state = self.engine.status()["moving_average"]
+        self.assertTrue(state["ready"])
+        self.assertEqual(state["required_candles"], 4)
+        self.assertGreaterEqual(state["stored_candles"], 4)
+        self.assertIsNotNone(state["short_ma"])
+        self.assertEqual(moving_average_state(snapshot().candles, 2, 3, 60)["position"], "above")
         self.assertEqual(moving_average_cross(snapshot((100,100,110,80)).candles, 2, 3, 60)[0], "sell")
         self.assertEqual(moving_average_cross(snapshot((100,100,100,100)).candles, 2, 3, 60)[0], "hold")
 

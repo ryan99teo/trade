@@ -42,8 +42,31 @@
     exchangeForm.elements.access_key.placeholder=keep;
     exchangeForm.elements.secret_key.placeholder=keep;
   }
+  function runStatus(data){
+    if(!data)return {mode:'unknown',label:'상태 확인 중',detail:'서버 상태를 확인하고 있습니다.',chip:'상태 확인 중',tab:'실거래'};
+    if(data.running){
+      const detail=data.buy_halted?'신호 판단과 주문은 계속하되 신규 매수만 중지된 상태입니다.':'전략 신호에 따라 실제 주문을 접수할 수 있는 상태입니다.';
+      return {mode:'running',label:'동작 중',detail,chip:'동작 중',tab:'실거래 · 동작 중'};
+    }
+    if(!data.enabled)return {mode:'disabled',label:'동작 중지',detail:'실제 주문 활성화가 꺼져 있습니다. 조회·주문 테스트만 가능합니다.',chip:'동작 중지',tab:'실거래 · 동작 중지'};
+    return {mode:'stopped',label:'동작 중지',detail:'실거래 엔진이 정지되어 새 주문을 넣지 않습니다.',chip:'동작 중지',tab:'실거래 · 동작 중지'};
+  }
+  function paintRun(data){
+    const run=runStatus(data);
+    const banner=get('real-run-banner'),chip=get('real-state'),dot=get('real-run-dot'),tab=get('real-tab');
+    banner.className='run-banner is-'+run.mode;
+    chip.className='run-chip is-'+run.mode;
+    get('real-run-label').textContent=run.label;
+    get('real-run-detail').textContent=run.detail;
+    chip.textContent=run.chip;
+    dot.classList.toggle('on',run.mode==='running');
+    if(tab)tab.textContent=run.tab;
+    return run;
+  }
   function show(data){
-    current=data;get('real-state').textContent=data.running?'실거래 실행 중':data.enabled?'실거래 정지':'실거래 비활성화';
+    current=data;
+    paintRun(data);
+    if(!data)return;
     get('real-guide').textContent=!data.configured?'위에서 업비트 Access Key · Secret Key를 저장한 뒤 계좌 연결을 확인하세요.':data.error||(!data.enabled?'조회·주문 테스트만 가능합니다. 실제 주문을 쓰려면 업비트 연동에서 실제 주문 활성화를 켜세요.':'계좌 연결 확인 → 주문 테스트 → 실제 주문 동의 → 실거래 시작 순서로 실행하세요.');
     get('real-budget').textContent=won(data.budget);get('real-cap').textContent='1회 매수 상한 '+won(data.order_cap);
     get('real-cash').textContent=won(data.cash);get('real-btc').textContent=Number(data.btc).toFixed(8);get('real-pnl').textContent=won(data.total_pnl);color(get('real-pnl'),data.total_pnl);
@@ -59,9 +82,10 @@
     }));
     if(!data.orders.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=7;td.className='empty';td.textContent='실제 주문 내역이 없습니다.';tr.append(td);get('real-orders').append(tr);}
     if(typeof renderGateLogs==='function')renderGateLogs('real-decision-gate-logs',(data.decision_gate||{}).logs);
+    if(typeof renderMovingAverage==='function')renderMovingAverage('real',data.moving_average);
     controls();
   }
-  async function refresh(){if(busy)return;try{show(await api('status'));}catch(error){get('real-message').textContent=error.message;current=null;controls();}}
+  async function refresh(){if(busy)return;try{show(await api('status'));}catch(error){get('real-message').textContent=error.message;current=null;show(null);controls();}}
   async function perform(path,body){
     if(busy)return;busy=true;controls();get('real-message').textContent='처리 중입니다.';
     try{const data=await api(path,body);if(data.mode==='live')show(data);get('real-message').textContent=data.message||'실거래 상태를 갱신했습니다.';}

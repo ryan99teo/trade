@@ -21,18 +21,67 @@ def allocation_signal(settings, candle, mark, equity, btc):
     return "hold", "BTC 비중이 목표 허용 범위 안에 있습니다."
 
 
-def moving_average_cross(candles, short, long, minutes):
-    """Only closed, consecutive bars; compare previous/current MA once per bar."""
-    if len(candles) < long + 1:
-        return "hold", "확정 캔들이 부족합니다."
-    bars = candles[-(long + 1):]
+def moving_average_state(candles, short, long, minutes):
+    """Snapshot for UI/status: readiness, current/previous MA, and continuity."""
+    needed = long + 1
+    state = {
+        "ready": False,
+        "gap": False,
+        "candle_count": len(candles),
+        "required_candles": needed,
+        "short_window": short,
+        "long_window": long,
+        "candle_minutes": minutes,
+        "short_ma": None,
+        "long_ma": None,
+        "previous_short_ma": None,
+        "previous_long_ma": None,
+        "spread": None,
+        "position": None,
+        "latest_candle": None,
+        "reason": "확정 캔들이 부족합니다.",
+    }
+    if len(candles) < needed:
+        return state
+    bars = candles[-needed:]
+    state["latest_candle"] = bars[-1].time.isoformat()
     if any(b.time - a.time != timedelta(minutes=minutes) for a, b in zip(bars, bars[1:])):
-        return "hold", "캔들 누락으로 판단을 보류합니다."
+        state["gap"] = True
+        state["reason"] = "캔들 누락으로 판단을 보류합니다."
+        return state
     prices = [b.close for b in bars]
-    previous_short = sum(prices[-short-1:-1]) / short
-    previous_long = sum(prices[-long-1:-1]) / long
+    previous_short = sum(prices[-short - 1:-1]) / short
+    previous_long = sum(prices[-long - 1:-1]) / long
     current_short = sum(prices[-short:]) / short
     current_long = sum(prices[-long:]) / long
+    if current_short > current_long:
+        position = "above"
+    elif current_short < current_long:
+        position = "below"
+    else:
+        position = "equal"
+    state.update(
+        ready=True,
+        short_ma=str(current_short),
+        long_ma=str(current_long),
+        previous_short_ma=str(previous_short),
+        previous_long_ma=str(previous_long),
+        spread=str(current_short - current_long),
+        position=position,
+        reason="이동평균 준비 완료",
+    )
+    return state
+
+
+def moving_average_cross(candles, short, long, minutes):
+    """Only closed, consecutive bars; compare previous/current MA once per bar."""
+    state = moving_average_state(candles, short, long, minutes)
+    if not state["ready"]:
+        return "hold", state["reason"]
+    previous_short = Decimal(state["previous_short_ma"])
+    previous_long = Decimal(state["previous_long_ma"])
+    current_short = Decimal(state["short_ma"])
+    current_long = Decimal(state["long_ma"])
     if previous_short <= previous_long and current_short > current_long:
         return "buy", "단기 이동평균이 장기 이동평균을 상향 돌파했습니다."
     if previous_short >= previous_long and current_short < current_long:

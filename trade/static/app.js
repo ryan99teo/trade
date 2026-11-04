@@ -15,6 +15,33 @@ function renderGateLogs(id, logs) {
   if(!logs||!logs.length){empty(el,'아직 게이트 호출 기록이 없습니다. 매수·매도 신호가 날 때 JSON이 쌓입니다.');return;}
   el.replaceChildren(...logs.map(row=>{const pre=document.createElement('pre');pre.textContent=JSON.stringify(row,null,2);return pre;}));
 }
+function renderMovingAverage(prefix, ma) {
+  const id=name=>$(prefix?`${prefix}-${name}`:name);
+  const chip=id('ma-ready'), shortEl=id('ma-short'), longEl=id('ma-long'), posEl=id('ma-position');
+  if(!chip||!ma)return;
+  const positions={above:'장기 위',below:'장기 아래',equal:'동일'};
+  const stored=ma.stored_candles??ma.candle_count??0, required=ma.required_candles||0;
+  let mode='unknown', label='확인 중';
+  if(ma.ready){mode='running';label='준비됨';}
+  else if(ma.gap){mode='stopped';label='캔들 누락';}
+  else if(stored>0){mode='stopped';label='캔들 부족';}
+  else{mode='unknown';label='데이터 없음';}
+  chip.className='run-chip is-'+mode;chip.textContent=label;
+  shortEl.textContent=ma.short_ma!=null?won(ma.short_ma):'—';
+  longEl.textContent=ma.long_ma!=null?won(ma.long_ma):'—';
+  id('ma-short-meta').textContent=`MA ${ma.short_window||'—'} · ${ma.candle_minutes||'—'}분봉`;
+  id('ma-long-meta').textContent=`MA ${ma.long_window||'—'} · ${ma.candle_minutes||'—'}분봉`;
+  posEl.textContent=ma.ready?(positions[ma.position]||ma.position):'—';
+  color(posEl, ma.ready?(ma.position==='above'?1:ma.position==='below'?-1:0):0);
+  id('ma-spread').textContent=ma.spread!=null?'차이 '+won(ma.spread):'교차 판단 대기';
+  id('ma-count').textContent=`${stored} / ${required}`;
+  id('ma-latest').textContent=ma.latest_candle?'최근 확정 '+time(ma.latest_candle):'확정 봉 대기';
+  const note=id('ma-note');
+  if(note){
+    const uses=ma.strategy==='ma_cross'?'이동평균 교차 전략이 이 값을 사용합니다.':'현재 전략은 이동평균을 쓰지 않습니다. 참고용으로만 표시합니다.';
+    note.textContent=(ma.reason||'시세 수집 후 이동평균 준비 상태를 표시합니다.')+' '+uses;
+  }
+}
 function chart() {
   const c=$('chart'), ratio=window.devicePixelRatio||1, width=c.clientWidth, height=170;
   c.width=width*ratio;c.height=height*ratio;const ctx=c.getContext('2d');ctx.scale(ratio,ratio);
@@ -38,7 +65,8 @@ function render(s) {
   const fills=$('fills');fills.replaceChildren(...s.fills.map(f=>{const tr=document.createElement('tr');[time(f.time),f.side==='buy'?'매수':'매도',won(f.price),Number(f.quantity).toFixed(8),won(f.fee),won(f.realized_pnl)].forEach(v=>{const td=document.createElement('td');td.textContent=v;tr.append(td);});return tr;}));
   if(!s.fills.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=6;td.className='empty';td.textContent='아직 체결이 없습니다. 거래 시작 후 선택한 전략의 매매 조건을 기다립니다.';tr.append(td);fills.append(tr);}
   renderLogs('decisions',s.decisions,true);renderLogs('events',s.events,false);
-  renderGateLogs('decision-gate-logs',(s.decision_gate||{}).logs);history=s.history;chart();
+  renderGateLogs('decision-gate-logs',(s.decision_gate||{}).logs);
+  renderMovingAverage('',s.moving_average);history=s.history;chart();
   if(s.last_error){marketError=true;$('notice').textContent=s.last_error+' 정상 시세 수신 후 거래 시작을 눌러 재개하세요.';$('notice').classList.add('error');}
   else if(marketError){marketError=false;$('notice').textContent='시세 수신이 복구되었습니다. 거래 시작을 눌러 재개할 수 있습니다.';$('notice').classList.remove('error');}
   window.currentTradeStatus=s;document.dispatchEvent(new CustomEvent('trade-status',{detail:s}));

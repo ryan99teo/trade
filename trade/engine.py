@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 from .market import UTC
 from .config import EDITABLE_FIELDS, coerce_setting
 from .decision_gate import DecisionGate, build_state, read_log as read_gate_log, write_log as write_gate_log
-from .strategy import moving_average_cross, allocation_signal
+from .strategy import moving_average_cross, moving_average_state, allocation_signal
 
 SATOSHI = Decimal("0.00000001")
 
@@ -251,4 +251,13 @@ class Engine:
                              "openrouter_api_key_set": bool(s.openrouter_api_key.strip()),
                              "candle_minutes": s.candle_minutes, "poll_seconds": s.poll_seconds},
                 "fills": db.recent("fills"), "decisions": db.recent("decisions"),
-                "events": db.recent("events", 30), "history": list(reversed(db.recent("equity", 240)))}
+                "events": db.recent("events", 30), "history": list(reversed(db.recent("equity", 240))),
+                "moving_average": self._moving_average_status()}
+
+    def _moving_average_status(self):
+        s, db = self.settings, self.store
+        state = moving_average_state(
+            db.recent_candles(s.long_window + 1), s.short_window, s.long_window, s.candle_minutes)
+        state["stored_candles"] = db.candle_count()
+        state["strategy"] = s.strategy
+        return state
