@@ -1,17 +1,33 @@
 (() => {
   const get=id=>document.getElementById(id),form=get('real-settings');
   get('real-fields').append(document.querySelector('#strategy-fields .bt-fields').cloneNode(true));
-  let current=null,busy=false,dirty=false;
+  let current=null,busy=false,dirty=false,gateDirty=false;
+  const gateForm=get('real-decision-gate-form');
   const states={prepared:'접수 준비',submitting:'접수 확인 중',unknown:'접수 불명 · 새 주문 중지',wait:'체결 대기',watch:'예약 대기',cancel_pending:'취소 확인 중',done:'체결 완료',cancel:'취소 완료',aborted:'미전송 폐기',rejected:'주문 거부'};
   const active=new Set(['prepared','submitting','unknown','wait','watch','cancel_pending']);
   async function api(path,body){const response=await fetch('/api/live/'+path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),data=await response.json();if(!response.ok)throw new Error(Array.isArray(data.detail)?data.detail.map(d=>d.msg).join(' / '):data.detail||'실거래 요청을 처리하지 못했습니다.');return data;}
+  function locked(){return !current||busy||current.running||current.orders.some(o=>active.has(o.state));}
   function controls(){
     const ready=current&&!busy;
     get('real-connect').disabled=!ready||!current.configured;get('real-test').disabled=!ready||!current.configured||current.running;
     get('real-start').disabled=!ready||!current.enabled||!current.configured||!current.connected||!!current.error||!current.quote_fresh||!current.tested_at||Date.now()-Date.parse(current.tested_at)>300000||current.running||!get('real-ack').checked||current.orders.some(o=>active.has(o.state));
     get('real-stop').disabled=!current;get('real-buy-toggle').disabled=!ready;
-    get('real-fields').disabled=!ready||current.running||current.orders.some(o=>active.has(o.state));
+    get('real-fields').disabled=locked();
     get('real-save').disabled=get('real-fields').disabled||!dirty;
+    get('real-decision-gate-fields').disabled=locked();
+    get('real-decision-gate-save').disabled=get('real-decision-gate-fields').disabled||!gateDirty;
+    get('real-decision-gate-reset').disabled=busy||!gateDirty;
+    const gate=current?.decision_gate||{};
+    get('real-decision-gate-state').textContent=!current?'상태 확인 중':locked()?'수정 잠김':(gate.enabled?(gate.configured?'사용 중':'사용 · 키 필요'):'꺼짐 · 수정 가능');
+  }
+  function fillGate(data){
+    const cfg=data.settings;
+    gateForm.elements.decision_gate_enabled.value=String(!!cfg.decision_gate_enabled);
+    gateForm.elements.decision_threshold_buy.value=Number(cfg.decision_threshold_buy)*100;
+    gateForm.elements.decision_threshold_sell.value=Number(cfg.decision_threshold_sell)*100;
+    gateForm.elements.decision_timeout_seconds.value=cfg.decision_timeout_seconds;
+    gateForm.elements.openrouter_api_key.value='';
+    gateForm.elements.openrouter_api_key.placeholder=cfg.openrouter_api_key_set?'저장됨 · 비우면 유지':'비우면 기존 키 유지';
   }
   function show(data){
     current=data;get('real-state').textContent=data.running?'실거래 실행 중':data.enabled?'실거래 정지':'실거래 비활성화';
@@ -21,6 +37,7 @@
     get('real-available').textContent=data.available_krw===null?'계좌 조회 전':'업비트 사용 가능 원화 '+won(data.available_krw);
     get('real-buy-toggle').textContent=data.buy_halted?'신규 매수 재개':'신규 매수 중지';
     if(!dirty){for(const name of ['strategy','dca_interval_hours','short_window','long_window','order_krw'])form.elements[name].value=data.settings[name];for(const name of ['max_exposure','daily_loss_limit','target_exposure','rebalance_tolerance'])form.elements[name].value=Number(data.settings[name])*100;}
+    if(!gateDirty)fillGate(data);
     form.elements.order_krw.max=data.order_cap;
     get('real-orders').replaceChildren(...data.orders.map(order=>{
       const tr=document.createElement('tr');for(const value of [time(order.created_at),order.side==='buy'?'매수':'매도',states[order.state]||order.state,Number(order.quantity).toFixed(8),won(order.funds),won(order.fee)]){const td=document.createElement('td');td.textContent=value;tr.append(td);}
@@ -42,6 +59,20 @@
   form.addEventListener('submit',async event=>{
     event.preventDefault();if(busy)return;const payload=Object.fromEntries(new FormData(form));for(const name of ['short_window','long_window','dca_interval_hours'])payload[name]=Number(payload[name]);for(const name of ['max_exposure','daily_loss_limit','target_exposure','rebalance_tolerance'])payload[name]=(Number(payload[name])/100).toFixed(8);
     busy=true;controls();try{const data=await api('settings',payload);dirty=false;show(data);get('real-settings-message').textContent='실거래 설정을 저장했습니다. 주문 테스트를 다시 실행하세요.';}catch(error){get('real-settings-message').textContent=error.message;}finally{busy=false;await refresh();}
+  });
+  gateForm.addEventListener('input',()=>{gateDirty=true;controls();get('real-decision-gate-message').textContent='저장하지 않은 변경 사항이 있습니다.';});
+  get('real-decision-gate-reset').addEventListener('click',()=>{if(!current)return;gateDirty=false;fillGate(current);controls();get('real-decision-gate-message').textContent='현재 저장된 설정으로 되돌렸습니다.';});
+  gateForm.addEventListener('submit',async event=>{
+    event.preventDefault();if(busy||locked())return;
+    const payload=Object.fromEntries(new FormData(gateForm));
+    payload.decision_gate_enabled=payload.decision_gate_enabled==='true';
+    payload.decision_threshold_buy=(Number(payload.decision_threshold_buy)/100).toFixed(8);
+    payload.decision_threshold_sell=(Number(payload.decision_threshold_sell)/100).toFixed(8);
+    payload.decision_timeout_seconds=Number(payload.decision_timeout_seconds);
+    if(!payload.openrouter_api_key)delete payload.openrouter_api_key;
+    busy=true;controls();get('real-decision-gate-message').textContent='게이트 설정을 저장하고 있습니다.';
+    try{const data=await api('decision-gate',payload);gateDirty=false;show(data);get('real-decision-gate-message').textContent='실거래 게이트 설정을 저장했습니다.';}
+    catch(error){get('real-decision-gate-message').textContent=error.message;}finally{busy=false;await refresh();}
   });
   refresh();setInterval(refresh,5000);
 })();

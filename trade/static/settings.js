@@ -45,6 +45,57 @@
 })();
 
 (() => {
+  const form=document.getElementById('decision-gate-form');
+  const fields=document.getElementById('decision-gate-fields');
+  const save=document.getElementById('decision-gate-save');
+  const message=document.getElementById('decision-gate-message');
+  const state=document.getElementById('decision-gate-state');
+  let current=null,dirty=false,saving=false,online=false;
+  function notify(text,error=false){message.textContent=text;message.classList.toggle('negative',error);}
+  function fill(){
+    if(!current)return;
+    const cfg=current.settings,gate=current.decision_gate||{};
+    form.elements.decision_gate_enabled.value=String(!!cfg.decision_gate_enabled);
+    form.elements.decision_threshold_buy.value=Number((Number(cfg.decision_threshold_buy)*100).toFixed(6));
+    form.elements.decision_threshold_sell.value=Number((Number(cfg.decision_threshold_sell)*100).toFixed(6));
+    form.elements.decision_timeout_seconds.value=cfg.decision_timeout_seconds;
+    form.elements.openrouter_api_key.value='';
+    form.elements.openrouter_api_key.placeholder=cfg.openrouter_api_key_set?'저장됨 · 비우면 유지':'비우면 기존 키 유지';
+    state.textContent=!online?'서버 연결 확인 필요':current.running?'거래 실행 중 · 수정 잠김':(gate.enabled?(gate.configured?'사용 중':'사용 · 키 필요'):'꺼짐 · 수정 가능');
+  }
+  function controls(){
+    fields.disabled=!online||!current||current.running||saving;
+    save.disabled=fields.disabled||!dirty;
+    document.getElementById('decision-gate-reset').disabled=saving||!dirty;
+  }
+  document.addEventListener('trade-status',event=>{
+    current=event.detail;online=true;
+    if(!dirty&&!saving)fill();
+    controls();
+  });
+  document.addEventListener('trade-disconnected',()=>{online=false;controls();state.textContent='서버 연결 확인 필요';notify('서버에 연결할 수 없습니다.',true);});
+  form.addEventListener('input',()=>{dirty=true;controls();notify('저장하지 않은 변경 사항이 있습니다.');});
+  document.getElementById('decision-gate-reset').addEventListener('click',()=>{dirty=false;fill();controls();notify('현재 저장된 설정으로 되돌렸습니다.');});
+  form.addEventListener('submit',async event=>{
+    event.preventDefault();if(saving||!current||current.running||!online)return;
+    const payload=Object.fromEntries(new FormData(form));
+    payload.decision_gate_enabled=payload.decision_gate_enabled==='true';
+    payload.decision_threshold_buy=(Number(payload.decision_threshold_buy)/100).toFixed(8);
+    payload.decision_threshold_sell=(Number(payload.decision_threshold_sell)/100).toFixed(8);
+    payload.decision_timeout_seconds=Number(payload.decision_timeout_seconds);
+    if(!payload.openrouter_api_key)delete payload.openrouter_api_key;
+    saving=true;controls();notify('게이트 설정을 저장하고 있습니다.');
+    try{
+      const response=await fetch('/api/decision-gate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+      const data=await response.json();
+      if(!response.ok)throw new Error(Array.isArray(data.detail)?data.detail.map(d=>d.msg).join(' / '):data.detail||'게이트 설정을 저장하지 못했습니다.');
+      dirty=false;saving=false;render(data);notify('게이트 설정을 저장했습니다. 거래 시작 후 매매 신호에 적용됩니다.');
+    }catch(error){notify(error.message,true);}finally{saving=false;controls();}
+  });
+  if(window.currentTradeStatus)document.dispatchEvent(new CustomEvent('trade-status',{detail:window.currentTradeStatus}));
+})();
+
+(() => {
   const button=document.getElementById('telegram-test'),state=document.getElementById('telegram-state'),message=document.getElementById('telegram-message');
   let sending=false;
   const names={fill:'모의 체결',risk:'손실 한도',error:'시세 수집 장애',recovery:'시세 수신 복구',test:'테스트 알림'};

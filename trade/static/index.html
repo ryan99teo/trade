@@ -91,6 +91,22 @@
         <div class="bt-actions"><button id="strategy-save" type="submit" class="primary" disabled>설정 저장</button><button id="strategy-reset" type="button">수정 취소</button><p id="strategy-message" role="status">현재 설정을 불러오고 있습니다.</p></div>
       </form>
     </section>
+    <section class="panel">
+      <div class="panel-head"><h3>디시젼 게이트</h3><span id="decision-gate-state">상태 확인 중</span></div>
+      <p class="muted">이동평균·분할매수·리밸런싱 공통으로, 매수·매도 신호 후 OpenRouter Decisions(typesafe/jev-1.14)로 최종 진행 여부를 판정합니다. 백테스트에는 적용되지 않습니다.</p>
+      <form id="decision-gate-form">
+        <fieldset id="decision-gate-fields" disabled>
+          <div class="bt-fields">
+            <label>디시젼 게이트<select name="decision_gate_enabled"><option value="false">끄기</option><option value="true">켜기</option></select></label>
+            <label>OpenRouter API 키<input name="openrouter_api_key" type="password" autocomplete="off" placeholder="비우면 기존 키 유지" maxlength="512"></label>
+            <label>매수 게이트 임계값 (%)<input name="decision_threshold_buy" type="number" min="0.01" max="100" step="0.01" required></label>
+            <label>매도 게이트 임계값 (%)<input name="decision_threshold_sell" type="number" min="0.01" max="100" step="0.01" required></label>
+            <label>게이트 제한 시간 (초)<input name="decision_timeout_seconds" type="number" min="0.1" max="30" step="0.1" required></label>
+          </div>
+        </fieldset>
+        <div class="bt-actions"><button id="decision-gate-save" type="submit" class="primary" disabled>게이트 설정 저장</button><button id="decision-gate-reset" type="button">수정 취소</button><p id="decision-gate-message" role="status">현재 설정을 불러오고 있습니다.</p></div>
+      </form>
+    </section>
     <section class="panel"><div class="panel-head"><h3>텔레그램 알림</h3><span id="telegram-state">상태 확인 중</span></div>
       <p class="muted">모의 체결 · 손실 한도 도달 · 시세 수집 장애 및 복구를 알립니다.</p>
       <p id="telegram-guide" class="muted">연결 설정을 확인하고 있습니다.</p>
@@ -116,6 +132,22 @@
     </section>
     <section class="metrics"><article><p>실거래 운영 예산</p><h2 id="real-budget">—</h2><small id="real-cap">1회 매수 상한 —</small></article><article><p>운영 장부 원화</p><h2 id="real-cash">—</h2><small>실제 체결 금액·수수료 반영</small></article><article><p>봇이 관리하는 BTC</p><h2 id="real-btc">—</h2><small>기존 보유 BTC는 제외</small></article><article><p>실거래 총 손익</p><h2 id="real-pnl">—</h2><small id="real-available">계좌 조회 전</small></article></section>
     <section class="panel bt-chart-panel"><h3>실거래 전략 설정</h3><p class="muted">모의매매 설정과 별도로 저장합니다. 실거래 정지 및 미해결 주문이 없는 상태에서 변경할 수 있습니다.</p><form id="real-settings"><fieldset id="real-fields" disabled></fieldset><div class="bt-actions"><button id="real-save" type="submit" disabled>실거래 설정 저장</button><p id="real-settings-message" class="muted" role="status"></p></div></form></section>
+    <section class="panel">
+      <div class="panel-head"><h3>실거래 디시젼 게이트</h3><span id="real-decision-gate-state">상태 확인 중</span></div>
+      <p class="muted">실거래 엔진 전용입니다. 모의매매 게이트 설정과 별도로 저장합니다.</p>
+      <form id="real-decision-gate-form">
+        <fieldset id="real-decision-gate-fields" disabled>
+          <div class="bt-fields">
+            <label>디시젼 게이트<select name="decision_gate_enabled"><option value="false">끄기</option><option value="true">켜기</option></select></label>
+            <label>OpenRouter API 키<input name="openrouter_api_key" type="password" autocomplete="off" placeholder="비우면 기존 키 유지" maxlength="512"></label>
+            <label>매수 게이트 임계값 (%)<input name="decision_threshold_buy" type="number" min="0.01" max="100" step="0.01" required></label>
+            <label>매도 게이트 임계값 (%)<input name="decision_threshold_sell" type="number" min="0.01" max="100" step="0.01" required></label>
+            <label>게이트 제한 시간 (초)<input name="decision_timeout_seconds" type="number" min="0.1" max="30" step="0.1" required></label>
+          </div>
+        </fieldset>
+        <div class="bt-actions"><button id="real-decision-gate-save" type="submit" class="primary" disabled>게이트 설정 저장</button><button id="real-decision-gate-reset" type="button">수정 취소</button><p id="real-decision-gate-message" class="muted" role="status"></p></div>
+      </form>
+    </section>
     <section class="panel"><h3>실거래 주문 내역</h3><div class="scroll"><table><thead><tr><th>시각 (한국)</th><th>방향</th><th>상태</th><th>누적 체결 BTC</th><th>누적 금액</th><th>수수료</th><th>확인 / 취소</th></tr></thead><tbody id="real-orders"></tbody></table></div></section>
     <section class="panel"><h3>실거래 적용 기준</h3><ul class="muted"><li>가격 범위를 둔 지정가 IOC입니다. 미체결 잔량은 취소되며 실제 체결된 수량만 기록합니다.</li><li>접수 여부가 불명확한 주문은 자동으로 다시 보내지 않습니다. 업비트 주문 내역과 이 화면의 상태를 확인하세요.</li><li>기존 보유 BTC와 모의 잔고를 실거래 매도 대상으로 사용하지 않습니다.</li><li>재시작하면 실거래는 정지 상태이며, 기존 주문 조회와 체결 동기화만 재개합니다.</li></ul></section>
   </section>

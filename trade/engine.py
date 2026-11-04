@@ -4,24 +4,33 @@ from decimal import Decimal, ROUND_DOWN
 from zoneinfo import ZoneInfo
 
 from .market import UTC
-from .config import EDITABLE_FIELDS
+from .config import EDITABLE_FIELDS, coerce_setting
+from .decision_gate import DecisionGate, build_state, write_log as write_gate_log
 from .strategy import moving_average_cross, allocation_signal
 
 SATOSHI = Decimal("0.00000001")
 
 
 class Engine:
-    def __init__(self, settings, store):
+    def __init__(self, settings, store, decision_gate=None):
         self.settings = store.settings
         self.store = store
         self.running = False
         self.last_error = None
         self.last_received = None
         self.quote_time = None
+        self.decision_gate = decision_gate if decision_gate is not None else DecisionGate()
 
     def configure(self, changes, now=None):
         if self.running:
             raise RuntimeError("거래를 먼저 정지한 뒤 설정을 저장하세요.")
+        changes = dict(changes)
+        if "openrouter_api_key" in changes and not str(changes.get("openrouter_api_key") or "").strip():
+            # Blank password field keeps the previously saved key.
+            changes.pop("openrouter_api_key")
+        if "decision_gate_enabled" in changes:
+            changes["decision_gate_enabled"] = coerce_setting(self.settings, "decision_gate_enabled",
+                                                              changes["decision_gate_enabled"])
         if not changes or not set(changes) <= set(EDITABLE_FIELDS):
             raise ValueError("변경 가능한 전략 설정을 확인하세요.")
         settings = replace(self.settings, **changes)
@@ -81,6 +90,7 @@ class Engine:
         # Filter again so injected/replayed snapshots cannot introduce unfinished bars.
         candles = sorted((c for c in snapshot.candles
                           if c.time + timedelta(minutes=s.candle_minutes) <= now), key=lambda c: c.time)
+        pending = None
         with db.db:
             if recovered:
                 db.notify(now.isoformat(), "recovery", "[BTC 모의매매 · 시세 수신 복구]\n거래는 정지 상태입니다. 화면에서 거래 시작을 눌러 재개하세요.")
@@ -109,14 +119,56 @@ class Engine:
             if s.strategy == "ma_cross":
                 action, reason = moving_average_cross(candles, s.short_window, s.long_window, s.candle_minutes)
             else:
-                action, reason = allocation_signal(s,candle,snapshot.price,equity,db.number("btc"))
+                action, reason = allocation_signal(s, candle, snapshot.price, equity, db.number("btc"))
             signal_age = (now - candle.time - timedelta(minutes=s.candle_minutes)).total_seconds()
             if signal_age > 120:
                 action, reason = "hold", "캔들 확정 후 2분이 지나 과거 신호를 건너뜁니다."
+            if action == "hold":
+                db.db.execute("INSERT INTO decisions(time,candle,action,reason) VALUES (?,?,?,?)",
+                              (now.isoformat(), candle_id, action, reason))
+                return
+            pending = {
+                "candle_id": candle_id,
+                "action": action,
+                "reason": reason,
+                "mark": snapshot.price,
+                "equity": equity,
+                "cash": db.number("cash"),
+                "btc": db.number("btc"),
+                "baseline": baseline,
+                "buy_halted": db.get("buy_halted") == "1",
+                "candles": candles,
+            }
+
+        if pending is None:
+            return
+
+        state = build_state(pending["action"], pending["reason"], s, pending["mark"], pending["cash"],
+                            pending["btc"], pending["equity"], pending["baseline"], pending["candles"],
+                            pending["buy_halted"])
+        verdict = self.decision_gate.evaluate(s, pending["action"], state)
+        action, reason = pending["action"], pending["reason"]
+        if not verdict.skipped:
+            if verdict.proceed and verdict.noul is not None:
+                reason += " 디시젼 게이트 통과 (noul={:.2f}).".format(verdict.noul)
+            elif verdict.noul is not None:
+                reason += " 디시젼 게이트 포기 (noul={:.2f}).".format(verdict.noul)
+                action = "hold"
+            else:
+                reason += " 디시젼 게이트 오류로 보류 ({}).".format(verdict.detail or "unknown")
+                action = "hold"
+            write_gate_log(s, side=pending["action"], candle=pending["candle_id"], verdict=verdict,
+                           state=state, final_action=action)
+
+        with db.db:
+            if db.db.execute("SELECT 1 FROM decisions WHERE candle=?", (pending["candle_id"],)).fetchone():
+                return
             if action != "hold":
-                reason += " " + self._execute(action, snapshot.price, candle_id, now)
+                reason += " " + self._execute(action, pending["mark"], pending["candle_id"], now)
+            elif not verdict.skipped and not verdict.proceed:
+                db.event(now.isoformat(), "decision_gate", reason)
             db.db.execute("INSERT INTO decisions(time,candle,action,reason) VALUES (?,?,?,?)",
-                          (now.isoformat(), candle_id, action, reason))
+                          (now.isoformat(), pending["candle_id"], action, reason))
 
     def _execute(self, side, mark, identifier, now):
         # Called inside the decision transaction: fill + balance + deduplication commit together.
@@ -179,12 +231,22 @@ class Engine:
                 "realized_pnl": str(db.number("realized")),
                 "unrealized_pnl": str(db.number("btc") * price - db.number("cost")),
                 "daily_pnl": str(equity - baseline) if baseline else "0",
+                "decision_gate": {"enabled": s.decision_gate_enabled,
+                                  "threshold_buy": str(s.decision_threshold_buy),
+                                  "threshold_sell": str(s.decision_threshold_sell),
+                                  "timeout_seconds": s.decision_timeout_seconds,
+                                  "configured": bool(s.openrouter_api_key.strip())},
                 "settings": {"initial_cash": str(s.initial_cash), "order_krw": str(s.order_krw),
                              "max_exposure": str(s.max_exposure), "daily_loss_limit": str(s.daily_loss_limit),
                              "fee_rate": str(s.fee_rate), "slippage": str(s.slippage),
                              "short_window": s.short_window, "long_window": s.long_window,
                              "strategy":s.strategy, "dca_interval_hours":s.dca_interval_hours,
                              "target_exposure":str(s.target_exposure),"rebalance_tolerance":str(s.rebalance_tolerance),
+                             "decision_gate_enabled": s.decision_gate_enabled,
+                             "decision_threshold_buy": str(s.decision_threshold_buy),
+                             "decision_threshold_sell": str(s.decision_threshold_sell),
+                             "decision_timeout_seconds": s.decision_timeout_seconds,
+                             "openrouter_api_key_set": bool(s.openrouter_api_key.strip()),
                              "candle_minutes": s.candle_minutes, "poll_seconds": s.poll_seconds},
                 "fills": db.recent("fills"), "decisions": db.recent("decisions"),
                 "events": db.recent("events", 30), "history": list(reversed(db.recent("equity", 240)))}

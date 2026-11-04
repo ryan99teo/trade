@@ -38,6 +38,15 @@ class StrategyUpdate(BaseModel):
     rebalance_tolerance: Optional[Decimal] = Field(default=None,gt=0,lt=1)
 
 
+class DecisionGateUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    decision_gate_enabled: bool
+    decision_threshold_buy: Decimal = Field(gt=0, le=1)
+    decision_threshold_sell: Decimal = Field(gt=0, le=1)
+    decision_timeout_seconds: float = Field(gt=0, le=30)
+    openrouter_api_key: Optional[str] = Field(default=None, max_length=512)
+
+
 class LiveStart(BaseModel):
     model_config = ConfigDict(extra="forbid")
     acknowledge_real_orders: Literal[True]
@@ -155,6 +164,22 @@ def create_app(settings=None, market=None, history_market=None, telegram=None, e
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return app.state.engine.status()
 
+    def _decision_gate_payload(request: DecisionGateUpdate):
+        changes = request.model_dump()
+        if not (changes.get("openrouter_api_key") or "").strip():
+            changes.pop("openrouter_api_key", None)
+        return changes
+
+    @app.post("/api/decision-gate")
+    async def save_decision_gate(request: DecisionGateUpdate):
+        try:
+            app.state.engine.configure(_decision_gate_payload(request))
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return app.state.engine.status()
+
     @app.get("/api/live/status")
     async def live_status():return app.state.live.status()
 
@@ -201,6 +226,14 @@ def create_app(settings=None, market=None, history_market=None, telegram=None, e
         try:live.engine.configure(request.model_dump(exclude_none=True))
         except (ValueError,RuntimeError) as exc:raise HTTPException(status_code=409,detail=str(exc)) from exc
         live.tested_at=None
+        return live.status()
+
+    @app.post("/api/live/decision-gate")
+    async def live_decision_gate(request: DecisionGateUpdate):
+        live=app.state.live
+        if live.active():raise HTTPException(status_code=409,detail="미해결 실거래 주문을 먼저 확인하세요.")
+        try:live.engine.configure(_decision_gate_payload(request))
+        except (ValueError,RuntimeError) as exc:raise HTTPException(status_code=409,detail=str(exc)) from exc
         return live.status()
 
     @app.post("/api/live/orders/{identifier}/cancel")

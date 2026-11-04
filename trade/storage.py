@@ -6,12 +6,13 @@ from zoneinfo import ZoneInfo
 from dataclasses import asdict, replace
 from decimal import Decimal
 
-from .config import EDITABLE_FIELDS, NEW_STRATEGY_FIELDS, STRATEGY_NAMES, Settings
+from .config import (EDITABLE_FIELDS, FINGERPRINT_EXCLUDE, NEW_STRATEGY_FIELDS, STRATEGY_NAMES,
+                     Settings, coerce_setting)
 
 
 def fingerprint(settings):
     return json.dumps({k: str(v) for k, v in asdict(settings).items()
-                       if k not in ("db_path", "poll_seconds", "max_quote_age_seconds")}, sort_keys=True)
+                       if k not in FINGERPRINT_EXCLUDE}, sort_keys=True)
 
 
 class Store:
@@ -48,7 +49,7 @@ class Store:
             overrides = json.loads(self.get("strategy_overrides", "{}"))
             if not isinstance(overrides, dict) or not set(overrides) <= set(EDITABLE_FIELDS):
                 raise ValueError("저장된 전략 설정이 올바르지 않습니다.")
-            settings = replace(settings, **{k: type(getattr(settings, k))(v) for k,v in overrides.items()})
+            settings = replace(settings, **{k: coerce_setting(settings, k, v) for k, v in overrides.items()})
         except (ValueError, TypeError, ArithmeticError):
             self.db.close()
             raise
@@ -79,12 +80,33 @@ class Store:
         labels = {"short_window": "단기 이동평균", "long_window": "장기 이동평균",
                   "order_krw": "주문 금액", "max_exposure": "최대 BTC 비중", "daily_loss_limit": "일일 손실 한도",
                   "strategy":"전략", "dca_interval_hours":"분할매수 주기(시간)",
-                  "target_exposure":"목표 BTC 비중", "rebalance_tolerance":"허용 편차"}
+                  "target_exposure":"목표 BTC 비중", "rebalance_tolerance":"허용 편차",
+                  "decision_gate_enabled":"디시젼 게이트", "decision_threshold_buy":"매수 게이트 임계값",
+                  "decision_threshold_sell":"매도 게이트 임계값", "decision_timeout_seconds":"게이트 제한시간(초)",
+                  "openrouter_api_key":"OpenRouter API 키"}
+        percent_keys = ("max_exposure", "daily_loss_limit", "target_exposure", "rebalance_tolerance",
+                        "decision_threshold_buy", "decision_threshold_sell")
         def display(key, value):
-            if key == "strategy":return STRATEGY_NAMES.get(value,value)
-            return str(Decimal(value)*100)+"%" if key in ("max_exposure", "daily_loss_limit", "target_exposure", "rebalance_tolerance") else value
-        changes = ["{} {} → {}".format(labels[k], display(k,before[k]), display(k,after[k]))
-                   for k in EDITABLE_FIELDS if (before[k]!=after[k] if k=="strategy" else Decimal(before[k]) != Decimal(after[k]))]
+            if key == "strategy":
+                return STRATEGY_NAMES.get(value, value)
+            if key == "decision_gate_enabled":
+                return "사용" if coerce_setting(settings, key, value) else "미사용"
+            if key == "openrouter_api_key":
+                return "설정됨" if value.strip() else "미설정"
+            if key in percent_keys:
+                return str(Decimal(value) * 100) + "%"
+            return value
+
+        def changed(key):
+            if key in ("strategy", "openrouter_api_key", "decision_gate_enabled"):
+                return before[key] != after[key]
+            if key == "decision_timeout_seconds":
+                return Decimal(before[key]) != Decimal(after[key])
+            return Decimal(before[key]) != Decimal(after[key])
+
+        changes = ["{} {} → {}".format(labels[k], display(k, before[k]), display(k, after[k]))
+                   for k in EDITABLE_FIELDS if changed(k)]
+        # Persist key in overrides for restart; never write the secret into event text.
         with self.db:
             self.set("config", fingerprint(settings))
             self.set("strategy_overrides", json.dumps(after, sort_keys=True))
