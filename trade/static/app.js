@@ -1,6 +1,8 @@
 const $ = id => document.getElementById(id);
 const won = value => new Intl.NumberFormat('ko-KR', {maximumFractionDigits:0}).format(Number(value)) + '원';
 const time = value => value ? new Date(value).toLocaleString('ko-KR', {timeZone:'Asia/Seoul',hour12:false}) : '—';
+const strategyNames={ma_cross:'이동평균 교차',dca:'정액 분할매수',rebalance:'목표 비중 리밸런싱'};
+function strategyLabel(cfg){const name=cfg.strategy||'ma_cross';return name==='dca'?`정액 분할매수 · ${cfg.dca_interval_hours||24}시간`:name==='rebalance'?`리밸런싱 · 목표 ${Number(cfg.target_exposure||.2)*100}% ±${Number(cfg.rebalance_tolerance||.02)*100}%p`:`이동평균 교차 · MA ${cfg.short_window}/${cfg.long_window}`;}
 let busy = false, history = [], marketError = false;
 function color(el, value) { el.classList.toggle('positive', Number(value)>0); el.classList.toggle('negative', Number(value)<0); }
 function empty(el, message) { const p=document.createElement('p'); p.className='empty'; p.textContent=message; el.replaceChildren(p); }
@@ -26,10 +28,10 @@ function render(s) {
   $('cash').textContent=won(s.cash);$('btc').textContent=Number(s.btc).toFixed(8)+' BTC';$('price').textContent=Number(s.price)>0?won(s.price):'—';$('daily').textContent='당일 손익 '+won(s.daily_pnl);
   const toggle=$('buy-toggle');toggle.dataset.action=s.buy_halted?'resume_buys':'pause_buys';toggle.textContent=s.buy_halted?'신규 매수 재개':'신규 매수 중지';
   document.querySelector('[data-action="start"]').disabled=busy||s.running||!s.quote_fresh||!!s.last_error;
-  const cfg=s.settings, pairs=[['전략',`${cfg.candle_minutes}분봉 · MA ${cfg.short_window}/${cfg.long_window}`],['시세 수집 주기',`${cfg.poll_seconds}초`],['주문 금액',won(cfg.order_krw)],['최대 BTC 비중',Number(cfg.max_exposure)*100+'%'],['일일 손실 한도',Number(cfg.daily_loss_limit)*100+'%'],['가정 수수료 / 슬리피지',Number(cfg.fee_rate)*100+'% / '+Number(cfg.slippage)*100+'%']];
+  const cfg=s.settings, pairs=[['전략',strategyLabel(cfg)],['시세 수집 주기',`${cfg.poll_seconds}초`],['주문 금액',won(cfg.order_krw)],['최대 BTC 비중',Number(cfg.max_exposure)*100+'%'],['일일 손실 한도',Number(cfg.daily_loss_limit)*100+'%'],['가정 수수료 / 슬리피지',Number(cfg.fee_rate)*100+'% / '+Number(cfg.slippage)*100+'%']];
   $('settings').replaceChildren(...pairs.map(([key,value])=>{const div=document.createElement('div'),dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=key;dd.textContent=value;div.append(dt,dd);return div;}));
   const fills=$('fills');fills.replaceChildren(...s.fills.map(f=>{const tr=document.createElement('tr');[time(f.time),f.side==='buy'?'매수':'매도',won(f.price),Number(f.quantity).toFixed(8),won(f.fee),won(f.realized_pnl)].forEach(v=>{const td=document.createElement('td');td.textContent=v;tr.append(td);});return tr;}));
-  if(!s.fills.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=6;td.className='empty';td.textContent='아직 체결이 없습니다. 거래 시작 후 새로운 교차 신호를 기다립니다.';tr.append(td);fills.append(tr);}
+  if(!s.fills.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=6;td.className='empty';td.textContent='아직 체결이 없습니다. 거래 시작 후 선택한 전략의 매매 조건을 기다립니다.';tr.append(td);fills.append(tr);}
   renderLogs('decisions',s.decisions,true);renderLogs('events',s.events,false);history=s.history;chart();
   if(s.last_error){marketError=true;$('notice').textContent=s.last_error+' 정상 시세 수신 후 거래 시작을 눌러 재개하세요.';$('notice').classList.add('error');}
   else if(marketError){marketError=false;$('notice').textContent='시세 수신이 복구되었습니다. 거래 시작을 눌러 재개할 수 있습니다.';$('notice').classList.remove('error');}

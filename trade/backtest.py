@@ -11,10 +11,11 @@ import time
 from urllib.parse import urlencode
 import uuid
 from zoneinfo import ZoneInfo
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .config import Settings
+from .config import Settings, STRATEGY_NAMES
 from .engine import Engine, SATOSHI
 from .market import Candle, MarketError, Snapshot, UTC
 from .storage import Store
@@ -35,6 +36,10 @@ class BacktestRequest(BaseModel):
     slippage: Decimal = Field(default=D("0.001"), ge=0, lt=D("0.1"))
     max_exposure: Decimal = Field(default=D("0.30"), gt=0, le=1)
     daily_loss_limit: Decimal = Field(default=D("0.03"), gt=0, lt=1)
+    strategy: Literal["ma_cross","dca","rebalance"] = "ma_cross"
+    dca_interval_hours: int = Field(default=24,ge=1,le=168)
+    target_exposure: Decimal = Field(default=D("0.20"),gt=0,le=1)
+    rebalance_tolerance: Decimal = Field(default=D("0.02"),gt=0,lt=1)
 
     def bounds(self, now=None):
         today = (now or datetime.now(UTC)).astimezone(KST).date()
@@ -52,7 +57,9 @@ class BacktestRequest(BaseModel):
         return Settings(db_path=Path(":memory:"), initial_cash=self.initial_cash, order_krw=self.order_krw,
                         short_window=self.short_window, long_window=self.long_window,
                         fee_rate=self.fee_rate, slippage=self.slippage, max_exposure=self.max_exposure,
-                        daily_loss_limit=self.daily_loss_limit, candle_minutes=60)
+                        daily_loss_limit=self.daily_loss_limit, candle_minutes=60,strategy=self.strategy,
+                        dca_interval_hours=self.dca_interval_hours,target_exposure=self.target_exposure,
+                        rebalance_tolerance=self.rebalance_tolerance)
 
 
 @dataclass(frozen=True)
@@ -247,7 +254,7 @@ def replay(request, bars):
                 "notes": ["확정 1시간봉 신호 → 다음 봉 시가에 수수료·슬리피지를 적용해 전량 체결합니다.",
                           "준비 구간은 성과에서 제외합니다. 종료 시 BTC는 강제 매도하지 않고 종가로 평가합니다.",
                           "단순 보유는 동일 초기 자금 전액을 첫 시가에 매수하고 동일 비용을 적용합니다. 전략의 최대 BTC 비중과는 다릅니다.",
-                          "승률은 수수료를 반영한 청산 완료 거래 기준입니다. 청산이 없으면 승률은 미정입니다.",
+                          "승률은 수수료·배분 원가를 반영한 매도 체결 기준입니다. 일부 매도도 1회로 계산하며 매도가 없으면 미정입니다.",
                           "최대 낙폭은 시가·체결 직후·종가 관측 기준이며 봉 내부의 가격 경로는 재현하지 않습니다.",
                           "누락 캔들은 보간하지 않습니다. 누락 전후에는 연속 캔들이 충분할 때까지 신호를 보류하며 미관측 구간의 손실은 측정할 수 없습니다.",
                           "일일 손실은 시가에서 검사하며, 한도 도달 후 신규 매수 중지는 테스트 종료까지 유지됩니다."]}
@@ -273,6 +280,25 @@ def read_archive(path, run_id=None):
     archive = BacktestArchive(path)
     try:
         return archive.result(run_id) if run_id is not None else archive.runs()
+    finally:
+        archive.close()
+
+
+def compare_backtests(path, market, request):
+    trials = [request.model_copy(update={"strategy":name}) for name in STRATEGY_NAMES]
+    for trial in trials:
+        trial.bounds()
+    start,end = request.bounds()
+    archive = BacktestArchive(path)
+    try:
+        bars,calls = collect_history(market,archive,start-timedelta(hours=request.long_window+1),end)
+        results=[]
+        for trial in trials:
+            result=replay(trial,bars)
+            result["data"]={"source":"Upbit KRW-BTC","candle_minutes":60,"network_requests":calls if not results else 0,
+                            "warmup_candles":sum(b.time<start for b in bars),"start":start.isoformat(),"end_exclusive":end.isoformat()}
+            results.append(archive.save_result(trial,result))
+        return {"runs":results}
     finally:
         archive.close()
 

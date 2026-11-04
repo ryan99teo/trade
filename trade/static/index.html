@@ -7,11 +7,12 @@
   <script src="/static/app.js" defer></script>
   <script src="/static/backtest.js" defer></script>
   <script src="/static/settings.js" defer></script>
+  <script src="/static/live.js" defer></script>
 </head>
 <body>
 <main>
-  <header><div><p class="eyebrow">PERSONAL TRADING DESK</p><h1>Bitcoin <span>KRW-BTC</span></h1></div><span class="badge">모의매매 전용</span></header>
-  <nav class="tabs" aria-label="거래 화면 선택"><button id="live-tab" aria-pressed="true" data-view="live">실시간 모의매매</button><button id="backtest-tab" aria-pressed="false" data-view="backtest">백테스트 · 성과 분석</button><button id="strategy-tab" aria-pressed="false" data-view="strategy">전략 설정</button></nav>
+  <header><div><p class="eyebrow">PERSONAL TRADING DESK</p><h1>Bitcoin <span>KRW-BTC</span></h1></div><span class="badge">모의매매 / 실거래</span></header>
+  <nav class="tabs" aria-label="거래 화면 선택"><button id="live-tab" aria-pressed="true" data-view="live">실시간 모의매매</button><button id="backtest-tab" aria-pressed="false" data-view="backtest">백테스트 · 성과 분석</button><button id="strategy-tab" aria-pressed="false" data-view="strategy">전략 설정</button><button id="real-tab" aria-pressed="false" data-view="real">실거래</button></nav>
   <section id="live-view">
   <section class="toolbar"><div><span id="indicator" class="dot"></span><strong id="status">연결 중</strong><p id="updated">업비트 시세를 기다리고 있습니다.</p></div><div class="buttons"><button data-action="start" class="primary">거래 시작</button><button data-action="stop">거래 정지</button><button id="buy-toggle" data-action="pause_buys">신규 매수 중지</button></div></section>
   <p id="notice" role="status">실제 주문과 자금 이동은 발생하지 않습니다. 시작 버튼을 누르면 가상 계좌로 거래합니다.</p>
@@ -33,27 +34,33 @@
       <p class="muted">한국시간 기준 최대 365일, 어제까지 선택할 수 있습니다. 준비 구간을 추가 수집하고 다음 봉 시가에 가상 체결합니다.</p>
       <form id="bt-form">
         <div class="bt-fields">
+          <label>전략<select name="strategy"><option value="ma_cross">이동평균 교차</option><option value="dca">정액 분할매수</option><option value="rebalance">목표 비중 리밸런싱</option></select></label>
           <label>시작일<input name="start_date" id="bt-start" type="date" required></label>
           <label>종료일 (포함)<input name="end_date" id="bt-end" type="date" required></label>
           <label>초기 자금 (원)<input name="initial_cash" type="number" min="5000" max="100000000000" step="1" value="1000000" required></label>
-          <label>1회 매수 금액 (원)<input name="order_krw" type="number" min="5000" step="1" value="100000" required></label>
+          <label>1회 주문 금액 (원)<input name="order_krw" type="number" min="5000" step="1" value="100000" required></label>
           <label>단기 이동평균 (봉)<input name="short_window" type="number" min="1" max="198" step="1" value="5" required></label>
           <label>장기 이동평균 (봉)<input name="long_window" type="number" min="2" max="199" step="1" value="20" required></label>
           <label>편도 수수료 (%)<input name="fee_rate" type="number" min="0" max="9.99" step="0.001" value="0.05" required></label>
           <label>편도 슬리피지 (%)<input name="slippage" type="number" min="0" max="9.99" step="0.001" value="0.1" required></label>
           <label>최대 BTC 비중 (%)<input name="max_exposure" type="number" min="0.01" max="100" step="0.01" value="30" required></label>
           <label>일일 손실 한도 (%)<input name="daily_loss_limit" type="number" min="0.01" max="99.99" step="0.01" value="3" required></label>
+          <label>분할매수 주기<select name="dca_interval_hours"><option value="1">1시간</option><option value="4">4시간</option><option value="6">6시간</option><option value="12">12시간</option><option value="24" selected>24시간 · 매일 한국시간 09시</option><option value="48">48시간</option><option value="168">168시간</option></select></label>
+          <label>리밸런싱 목표 BTC 비중 (%)<input name="target_exposure" type="number" min="0.01" max="100" step="0.01" value="20" required></label>
+          <label>리밸런싱 허용 편차 (%p)<input name="rebalance_tolerance" type="number" min="0.01" max="99.99" step="0.01" value="2" required></label>
         </div>
-        <div class="bt-actions"><button id="bt-run" type="submit" class="primary">백테스트 실행</button><p id="bt-message" role="status">모의계좌 잔고와 실행 상태에 영향을 주지 않습니다.</p></div>
+        <div class="bt-actions"><button id="bt-run" type="submit" class="primary" value="single">백테스트 실행</button><button id="bt-compare" type="submit" value="compare">세 전략 비교</button><p id="bt-message" role="status">모의계좌 잔고와 실행 상태에 영향을 주지 않습니다.</p></div>
+        <p class="muted">이동평균 기간은 교차 전략에, 주기는 분할매수에, 목표 비중·편차는 리밸런싱에 적용됩니다. 세 전략 비교는 나머지 조건과 캔들을 동일하게 사용합니다.</p>
       </form>
     </section>
     <section class="panel"><div class="bt-history"><label for="bt-history">저장된 결과</label><select id="bt-history"><option value="">실행 결과를 선택하세요</option></select><a id="bt-csv" hidden>거래 내역 CSV 다운로드</a></div></section>
+    <section id="bt-comparison" class="panel" hidden><h3>동일 조건 · 세 전략 비교</h3><p id="bt-comparison-period" class="muted"></p><div class="scroll"><table><thead><tr><th>전략</th><th>수익률</th><th>최대 낙폭</th><th>매도 승률</th><th>체결 수</th><th>수수료</th><th></th></tr></thead><tbody id="bt-comparison-rows"></tbody></table></div><p class="muted">상세 보기를 선택하면 아래 그래프와 거래 내역이 해당 전략으로 바뀝니다. 비교 결과는 각각 저장됩니다.</p></section>
     <div id="bt-result" hidden>
       <p id="bt-period" class="muted"></p>
       <section class="metrics bt-metrics">
         <article><p>전략 수익률</p><h2 id="bt-return">—</h2><small id="bt-pnl">—</small></article>
         <article><p>최대 낙폭 (MDD)</p><h2 id="bt-mdd">—</h2><small>시가·체결 직후·종가 관측 기준</small></article>
-        <article><p>청산 거래 승률</p><h2 id="bt-win">—</h2><small id="bt-trades">—</small></article>
+        <article><p>매도 거래 승률</p><h2 id="bt-win">—</h2><small id="bt-trades">—</small></article>
         <article><p>BTC 단순 보유 수익률</p><h2 id="bt-benchmark">—</h2><small id="bt-excess">—</small></article>
       </section>
       <section class="panel bt-chart-panel"><div class="panel-head"><h3>자산 추이 비교</h3><span><i class="legend strategy"></i>전략 <i class="legend benchmark"></i>BTC 단순 보유</span></div><canvas id="bt-chart" role="img" aria-label="전략과 BTC 단순 보유 평가 자산 비교"></canvas><p id="bt-hover" class="muted">그래프 위에 마우스를 올리면 해당 시점의 자산을 확인할 수 있습니다.</p></section>
@@ -66,19 +73,29 @@
   <section id="strategy-view" hidden>
     <section class="panel">
       <div class="panel-head"><h3>실시간 모의매매 전략 설정</h3><span id="strategy-state">상태 확인 중</span></div>
-      <p class="muted">이동평균 교차 전략의 매매 조건과 자금 한도를 변경합니다. 거래를 정지한 뒤 저장할 수 있으며, 저장 후 거래는 자동으로 시작되지 않습니다.</p>
+      <p class="muted">전략과 자금 한도를 변경합니다. 이동평균 기간은 교차 전략에, 매수 주기는 분할매수에, 목표 비중·편차는 리밸런싱에 적용됩니다. 거래를 정지한 뒤 저장할 수 있으며 저장 후 자동으로 시작되지 않습니다.</p>
       <form id="strategy-form">
         <fieldset id="strategy-fields" disabled>
           <div class="bt-fields">
+            <label>실행 전략<select name="strategy"><option value="ma_cross">이동평균 교차</option><option value="dca">정액 분할매수</option><option value="rebalance">목표 비중 리밸런싱</option></select></label>
             <label>단기 이동평균 (봉)<input name="short_window" type="number" min="1" max="198" step="1" required></label>
             <label>장기 이동평균 (봉)<input name="long_window" type="number" min="2" max="199" step="1" required></label>
-            <label>1회 매수 금액 (원)<input name="order_krw" type="number" min="5000" step="1" required></label>
+            <label>1회 주문 금액 (원)<input name="order_krw" type="number" min="5000" step="1" required></label>
             <label>최대 BTC 비중 (%)<input name="max_exposure" type="number" min="0.01" max="100" step="0.01" required></label>
             <label>일일 손실 한도 (%)<input name="daily_loss_limit" type="number" min="0.01" max="99.99" step="0.01" required></label>
+            <label>분할매수 주기<select name="dca_interval_hours"><option value="1">1시간</option><option value="4">4시간</option><option value="6">6시간</option><option value="12">12시간</option><option value="24">24시간 · 매일 한국시간 09시</option><option value="48">48시간</option><option value="168">168시간</option></select></label>
+            <label>리밸런싱 목표 BTC 비중 (%)<input name="target_exposure" type="number" min="0.01" max="100" step="0.01" required></label>
+            <label>리밸런싱 허용 편차 (%p)<input name="rebalance_tolerance" type="number" min="0.01" max="99.99" step="0.01" required></label>
           </div>
         </fieldset>
         <div class="bt-actions"><button id="strategy-save" type="submit" class="primary" disabled>설정 저장</button><button id="strategy-reset" type="button">수정 취소</button><p id="strategy-message" role="status">현재 설정을 불러오고 있습니다.</p></div>
       </form>
+    </section>
+    <section class="panel"><div class="panel-head"><h3>텔레그램 알림</h3><span id="telegram-state">상태 확인 중</span></div>
+      <p class="muted">모의 체결 · 손실 한도 도달 · 시세 수집 장애 및 복구를 알립니다.</p>
+      <p id="telegram-guide" class="muted">연결 설정을 확인하고 있습니다.</p>
+      <div class="bt-actions"><button id="telegram-test" type="button" disabled>테스트 알림 보내기</button><p id="telegram-message" role="status"></p></div>
+      <dl id="telegram-counts"></dl><div id="telegram-history" class="log"></div>
     </section>
     <section class="panel"><h3>설정 적용 기준</h3><dl id="strategy-fixed"></dl><ul class="muted">
       <li>저장한 설정은 서버를 재시작해도 유지됩니다. 백테스트 입력값은 별도로 관리합니다.</li>
@@ -88,6 +105,20 @@
       <li>신규 매수 중지 상태는 설정 저장으로 해제되지 않습니다. 실시간 화면에서 별도로 재개하세요.</li>
     </ul></section>
   </section>
-  <footer>업비트 공개 시세 · 가상 체결 · 계정 API 키 불필요</footer>
+  <section id="real-view" hidden>
+    <section class="panel real-panel"><div class="panel-head"><h3>업비트 실거래 · 실제 자금</h3><span id="real-state">상태 확인 중</span></div>
+      <p id="real-guide" class="muted">서버의 업비트 연결 설정을 확인하고 있습니다.</p>
+      <div class="buttons"><button id="real-connect">계좌 연결 확인</button><button id="real-test">주문 테스트 (미체결)</button><button id="real-stop">실거래 정지</button><button id="real-buy-toggle">신규 매수 중지</button></div>
+      <p id="real-message" role="status" class="muted"></p>
+      <label class="real-ack"><input id="real-ack" type="checkbox">별도 실거래 예산으로 실제 주문이 실행되는 것에 동의합니다.</label>
+      <button id="real-start" class="primary" disabled>실거래 시작</button>
+      <p class="muted">정지는 새 주문을 막습니다. 이미 접수한 주문은 체결될 수 있으므로 아래 주문 내역에서 취소·최종 상태를 확인하세요.</p>
+    </section>
+    <section class="metrics"><article><p>실거래 운영 예산</p><h2 id="real-budget">—</h2><small id="real-cap">1회 매수 상한 —</small></article><article><p>운영 장부 원화</p><h2 id="real-cash">—</h2><small>실제 체결 금액·수수료 반영</small></article><article><p>봇이 관리하는 BTC</p><h2 id="real-btc">—</h2><small>기존 보유 BTC는 제외</small></article><article><p>실거래 총 손익</p><h2 id="real-pnl">—</h2><small id="real-available">계좌 조회 전</small></article></section>
+    <section class="panel bt-chart-panel"><h3>실거래 전략 설정</h3><p class="muted">모의매매 설정과 별도로 저장합니다. 실거래 정지 및 미해결 주문이 없는 상태에서 변경할 수 있습니다.</p><form id="real-settings"><fieldset id="real-fields" disabled></fieldset><div class="bt-actions"><button id="real-save" type="submit" disabled>실거래 설정 저장</button><p id="real-settings-message" class="muted" role="status"></p></div></form></section>
+    <section class="panel"><h3>실거래 주문 내역</h3><div class="scroll"><table><thead><tr><th>시각 (한국)</th><th>방향</th><th>상태</th><th>누적 체결 BTC</th><th>누적 금액</th><th>수수료</th><th>확인 / 취소</th></tr></thead><tbody id="real-orders"></tbody></table></div></section>
+    <section class="panel"><h3>실거래 적용 기준</h3><ul class="muted"><li>가격 범위를 둔 지정가 IOC입니다. 미체결 잔량은 취소되며 실제 체결된 수량만 기록합니다.</li><li>접수 여부가 불명확한 주문은 자동으로 다시 보내지 않습니다. 업비트 주문 내역과 이 화면의 상태를 확인하세요.</li><li>기존 보유 BTC와 모의 잔고를 실거래 매도 대상으로 사용하지 않습니다.</li><li>재시작하면 실거래는 정지 상태이며, 기존 주문 조회와 체결 동기화만 재개합니다.</li></ul></section>
+  </section>
+  <footer>KRW-BTC · 모의매매와 실거래는 별도 기록으로 관리합니다.</footer>
 </main>
 </body></html>

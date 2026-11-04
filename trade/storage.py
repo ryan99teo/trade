@@ -1,9 +1,12 @@
 import json
 import sqlite3
+import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from dataclasses import asdict, replace
 from decimal import Decimal
 
-from .config import EDITABLE_FIELDS
+from .config import EDITABLE_FIELDS, NEW_STRATEGY_FIELDS, STRATEGY_NAMES, Settings
 
 
 def fingerprint(settings):
@@ -13,6 +16,8 @@ def fingerprint(settings):
 
 class Store:
     def __init__(self, settings):
+        self.notifications_recipient = None
+        self.notification_mode = "paper"
         settings.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(str(settings.db_path))
         self.db.row_factory = sqlite3.Row
@@ -32,6 +37,12 @@ class Store:
           id INTEGER PRIMARY KEY, time TEXT NOT NULL, kind TEXT NOT NULL, message TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS equity (
           time TEXT PRIMARY KEY, value TEXT NOT NULL, price TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS notifications (
+          id INTEGER PRIMARY KEY, recipient TEXT NOT NULL, kind TEXT NOT NULL,
+          created_at TEXT NOT NULL, message TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+          attempts INTEGER NOT NULL DEFAULT 0, next_attempt REAL NOT NULL DEFAULT 0,
+          last_error TEXT, sent_at TEXT, message_id TEXT);
+        CREATE INDEX IF NOT EXISTS notification_delivery ON notifications(recipient,status,next_attempt);
         """)
         try:
             overrides = json.loads(self.get("strategy_overrides", "{}"))
@@ -44,10 +55,18 @@ class Store:
         self.settings = settings
         current_fingerprint = fingerprint(settings)
         old = self.get("config")
-        if old is not None and old != current_fingerprint:
+        compatible_old = old
+        if old is not None:
+            old_values = json.loads(old)
+            for key in NEW_STRATEGY_FIELDS:
+                old_values.setdefault(key,str(getattr(Settings(),key)))
+            compatible_old = json.dumps(old_values,sort_keys=True)
+        if old is not None and compatible_old != current_fingerprint:
             self.db.close()
             raise ValueError("기존 모의 계좌와 설정이 다릅니다. 새 TRADE_DB_PATH를 사용하세요.")
         with self.db:
+            if old is not None and old != current_fingerprint:
+                self.set("config",current_fingerprint)
             if old is None:
                 for key, value in {"config": current_fingerprint, "cash": settings.initial_cash,
                                    "btc": "0", "cost": "0", "realized": "0",
@@ -58,11 +77,14 @@ class Store:
         before = {k: str(getattr(self.settings, k)) for k in EDITABLE_FIELDS}
         after = {k: str(getattr(settings, k)) for k in EDITABLE_FIELDS}
         labels = {"short_window": "단기 이동평균", "long_window": "장기 이동평균",
-                  "order_krw": "주문 금액", "max_exposure": "최대 BTC 비중", "daily_loss_limit": "일일 손실 한도"}
+                  "order_krw": "주문 금액", "max_exposure": "최대 BTC 비중", "daily_loss_limit": "일일 손실 한도",
+                  "strategy":"전략", "dca_interval_hours":"분할매수 주기(시간)",
+                  "target_exposure":"목표 BTC 비중", "rebalance_tolerance":"허용 편차"}
         def display(key, value):
-            return str(Decimal(value)*100)+"%" if key in ("max_exposure", "daily_loss_limit") else value
+            if key == "strategy":return STRATEGY_NAMES.get(value,value)
+            return str(Decimal(value)*100)+"%" if key in ("max_exposure", "daily_loss_limit", "target_exposure", "rebalance_tolerance") else value
         changes = ["{} {} → {}".format(labels[k], display(k,before[k]), display(k,after[k]))
-                   for k in EDITABLE_FIELDS if Decimal(before[k]) != Decimal(after[k])]
+                   for k in EDITABLE_FIELDS if (before[k]!=after[k] if k=="strategy" else Decimal(before[k]) != Decimal(after[k]))]
         with self.db:
             self.set("config", fingerprint(settings))
             self.set("strategy_overrides", json.dumps(after, sort_keys=True))
@@ -82,6 +104,17 @@ class Store:
 
     def event(self, time, kind, message):
         self.db.execute("INSERT INTO events(time,kind,message) VALUES (?,?,?)", (time, kind, message))
+        if kind == "risk":
+            self.notify(time, "risk", "[BTC 모의매매 · 위험 관리]\n"+message)
+
+    def notify(self, timestamp, kind, message):
+        if not self.notifications_recipient:
+            return None
+        if self.notification_mode == "live":message=message.replace("[BTC 모의매매","[BTC 실거래")
+        display_time = datetime.fromisoformat(timestamp).astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M:%S KST")
+        cursor = self.db.execute("INSERT INTO notifications(recipient,kind,created_at,message,next_attempt) VALUES (?,?,?,?,?)",
+                                 (self.notifications_recipient,kind,timestamp,message+"\n시각: "+display_time,time.time()))
+        return cursor.lastrowid
 
     def recent(self, table, limit=100):
         if table not in ("decisions", "fills", "events", "equity"):

@@ -1,4 +1,20 @@
 from datetime import timedelta
+from decimal import Decimal
+
+
+def allocation_signal(settings, candle, mark, equity, btc):
+    if settings.strategy == "dca":
+        # A fixed UTC epoch anchor is identical in live replay and backtests.
+        boundary = candle.time + timedelta(minutes=settings.candle_minutes)
+        due = int(boundary.timestamp()) % (settings.dca_interval_hours * 3600) == 0
+        return ("buy", "정액 분할매수 예약 시각입니다.") if due else ("hold", "다음 정액 분할매수 시각을 기다립니다.")
+    ratio = btc * mark / equity if equity > 0 else Decimal(0)
+    target, tolerance = settings.target_exposure, settings.rebalance_tolerance
+    if ratio < target - tolerance:
+        return "buy", "BTC 비중이 목표 허용 범위보다 낮아 매수합니다."
+    if ratio > min(target + tolerance,settings.max_exposure):
+        return "sell", "BTC 비중이 목표 허용 범위보다 높아 일부 매도합니다."
+    return "hold", "BTC 비중이 목표 허용 범위 안에 있습니다."
 
 
 def moving_average_cross(candles, short, long, minutes):

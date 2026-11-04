@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 from .market import UTC
 from .config import EDITABLE_FIELDS
-from .strategy import moving_average_cross
+from .strategy import moving_average_cross, allocation_signal
 
 SATOSHI = Decimal("0.00000001")
 
@@ -59,10 +59,13 @@ class Engine:
             self.store.event(now.isoformat(), "control", action)
 
     def fail(self, message, now=None):
+        changed = self.last_error != message
         self.running = False
         self.last_error = message
         with self.store.db:
             self.store.event((now or datetime.now(UTC)).isoformat(), "error", message)
+            if changed:
+                self.store.notify((now or datetime.now(UTC)).isoformat(), "error", "[BTC 모의매매 · 시세 수집 장애]\n"+message+"\n거래를 정지했습니다.")
 
     def process(self, snapshot, now=None):
         now = now or datetime.now(UTC)
@@ -73,11 +76,14 @@ class Engine:
             return
         self.quote_time = snapshot.quote_time
         self.last_received = now
+        recovered = self.last_error is not None
         self.last_error = None
         # Filter again so injected/replayed snapshots cannot introduce unfinished bars.
         candles = sorted((c for c in snapshot.candles
                           if c.time + timedelta(minutes=s.candle_minutes) <= now), key=lambda c: c.time)
         with db.db:
+            if recovered:
+                db.notify(now.isoformat(), "recovery", "[BTC 모의매매 · 시세 수신 복구]\n거래는 정지 상태입니다. 화면에서 거래 시작을 눌러 재개하세요.")
             db.set("price", snapshot.price)
             for candle in candles:
                 db.db.execute("INSERT INTO candles VALUES (?,?) ON CONFLICT(time) DO UPDATE SET close=excluded.close",
@@ -100,7 +106,10 @@ class Engine:
             candle_id = candle.time.isoformat()
             if db.db.execute("SELECT 1 FROM decisions WHERE candle=?", (candle_id,)).fetchone():
                 return
-            action, reason = moving_average_cross(candles, s.short_window, s.long_window, s.candle_minutes)
+            if s.strategy == "ma_cross":
+                action, reason = moving_average_cross(candles, s.short_window, s.long_window, s.candle_minutes)
+            else:
+                action, reason = allocation_signal(s,candle,snapshot.price,equity,db.number("btc"))
             signal_age = (now - candle.time - timedelta(minutes=s.candle_minutes)).total_seconds()
             if signal_age > 120:
                 action, reason = "hold", "캔들 확정 후 2분이 지나 과거 신호를 건너뜁니다."
@@ -120,6 +129,10 @@ class Engine:
             # Exposure cap includes projected fees/slippage loss in the equity denominator.
             cap = max(Decimal(0), (s.max_exposure * self.equity(mark) - btc * mark) /
                       (mark + s.max_exposure * (price * (1 + s.fee_rate) - mark)))
+            if s.strategy == "rebalance":
+                target_cap = max(Decimal(0),(s.target_exposure*self.equity(mark)-btc*mark) /
+                                 (mark+s.target_exposure*(price*(1+s.fee_rate)-mark)))
+                cap = min(cap,target_cap)
             quantity = min(s.order_krw / price, cash / (price * (1 + s.fee_rate)), cap).quantize(SATOSHI, rounding=ROUND_DOWN)
             notional = quantity * price
             if notional < 5000:
@@ -131,17 +144,24 @@ class Engine:
             realized = Decimal(0)
         else:
             quantity = btc
+            if s.strategy == "rebalance":
+                target_quantity = max(Decimal(0),(btc*mark-s.target_exposure*self.equity(mark)) /
+                                      (mark+s.target_exposure*(price*(1-s.fee_rate)-mark)))
+                quantity = min(btc,target_quantity,s.order_krw/price).quantize(SATOSHI,rounding=ROUND_DOWN)
             notional = quantity * price
             if notional < 5000:
                 return "매도 가능한 BTC가 없거나 최소 모의 주문 금액 미충족."
             fee = notional * s.fee_rate
-            realized = notional - fee - cost
+            allocated_cost = cost if quantity == btc else cost*quantity/btc
+            realized = notional - fee - allocated_cost
             db.set("cash", cash + notional - fee)
-            db.set("btc", "0")
-            db.set("cost", "0")
+            db.set("btc", btc-quantity)
+            db.set("cost", cost-allocated_cost)
             db.set("realized", db.number("realized") + realized)
         db.db.execute("INSERT INTO fills(time,identifier,side,price,quantity,fee,realized_pnl) VALUES (?,?,?,?,?,?,?)",
                       (now.isoformat(), identifier, side, str(price), str(quantity), str(fee), str(realized)))
+        db.notify(now.isoformat(), "fill", "[BTC 모의매매 · {} 체결]\nKRW-BTC\n가격: {:,.0f}원\n수량: {} BTC\n수수료: {:,.2f}원\n실현 손익: {:,.2f}원".format(
+            "매수" if side=="buy" else "매도",price,quantity,fee,realized))
         return "모의 체결 완료."
 
     def status(self):
@@ -163,6 +183,8 @@ class Engine:
                              "max_exposure": str(s.max_exposure), "daily_loss_limit": str(s.daily_loss_limit),
                              "fee_rate": str(s.fee_rate), "slippage": str(s.slippage),
                              "short_window": s.short_window, "long_window": s.long_window,
+                             "strategy":s.strategy, "dca_interval_hours":s.dca_interval_hours,
+                             "target_exposure":str(s.target_exposure),"rebalance_tolerance":str(s.rebalance_tolerance),
                              "candle_minutes": s.candle_minutes, "poll_seconds": s.poll_seconds},
                 "fills": db.recent("fills"), "decisions": db.recent("decisions"),
                 "events": db.recent("events", 30), "history": list(reversed(db.recent("equity", 240)))}
