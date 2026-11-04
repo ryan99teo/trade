@@ -45,7 +45,8 @@
           <label>편도 슬리피지 (%)<input name="slippage" type="number" min="0" max="9.99" step="0.001" value="0.1" required></label>
           <label>최대 BTC 비중 (%)<input name="max_exposure" type="number" min="0.01" max="100" step="0.01" value="30" required></label>
           <label>일일 손실 한도 (%)<input name="daily_loss_limit" type="number" min="0.01" max="99.99" step="0.01" value="3" required></label>
-          <label>분할매수 주기<select name="dca_interval_hours"><option value="1">1시간</option><option value="4">4시간</option><option value="6">6시간</option><option value="12">12시간</option><option value="24" selected>24시간 · 매일 한국시간 09시</option><option value="48">48시간</option><option value="168">168시간</option></select></label>
+          <label>분할매수 주기<select name="dca_interval_hours"><option value="1">1시간</option><option value="4">4시간</option><option value="6">6시간</option><option value="12">12시간</option><option value="24" selected>24시간</option><option value="48">48시간</option><option value="168">168시간</option></select></label>
+          <label>분할매수 시작 분<input name="dca_offset_minutes" type="number" min="0" max="10079" step="1" value="0" required title="UTC 주기 경계 이후 분. 예: 24시간+35 → 한국시간 09:35. 1시간봉이면 해당 시각 포함 봉 확정 후 매수"></label>
           <label>리밸런싱 목표 BTC 비중 (%)<input name="target_exposure" type="number" min="0.01" max="100" step="0.01" value="20" required></label>
           <label>리밸런싱 허용 편차 (%p)<input name="rebalance_tolerance" type="number" min="0.01" max="99.99" step="0.01" value="2" required></label>
         </div>
@@ -83,7 +84,8 @@
             <label>1회 주문 금액 (원)<input name="order_krw" type="number" min="5000" step="1" required></label>
             <label>최대 BTC 비중 (%)<input name="max_exposure" type="number" min="0.01" max="100" step="0.01" required></label>
             <label>일일 손실 한도 (%)<input name="daily_loss_limit" type="number" min="0.01" max="99.99" step="0.01" required></label>
-            <label>분할매수 주기<select name="dca_interval_hours"><option value="1">1시간</option><option value="4">4시간</option><option value="6">6시간</option><option value="12">12시간</option><option value="24">24시간 · 매일 한국시간 09시</option><option value="48">48시간</option><option value="168">168시간</option></select></label>
+            <label>분할매수 주기<select name="dca_interval_hours"><option value="1">1시간</option><option value="4">4시간</option><option value="6">6시간</option><option value="12">12시간</option><option value="24">24시간</option><option value="48">48시간</option><option value="168">168시간</option></select></label>
+            <label>분할매수 시작 분<input name="dca_offset_minutes" type="number" min="0" max="10079" step="1" required title="UTC 주기 경계 이후 분. 예: 24시간+35 → 한국시간 09:35. 1시간봉이면 해당 시각 포함 봉 확정 후 매수"></label>
             <label>리밸런싱 목표 BTC 비중 (%)<input name="target_exposure" type="number" min="0.01" max="100" step="0.01" required></label>
             <label>리밸런싱 허용 편차 (%p)<input name="rebalance_tolerance" type="number" min="0.01" max="99.99" step="0.01" required></label>
           </div>
@@ -122,6 +124,20 @@
     </ul></section>
   </section>
   <section id="real-view" hidden>
+    <section class="panel">
+      <div class="panel-head"><h3>업비트 연동</h3><span id="real-exchange-state">상태 확인 중</span></div>
+      <p class="muted">Access Key · Secret Key와 실제 주문 활성 여부를 이 화면에 저장합니다. 키는 실거래 DB에만 보관하며 상태 API에 다시 표시하지 않습니다. 출금 권한은 부여하지 마세요.</p>
+      <form id="real-exchange-form">
+        <fieldset id="real-exchange-fields" disabled>
+          <div class="bt-fields">
+            <label>실제 주문 활성화<select name="enabled"><option value="false">끄기 · 조회·주문 테스트만</option><option value="true">켜기 · 실제 주문 허용</option></select></label>
+            <label>Access Key<input name="access_key" type="password" autocomplete="off" placeholder="비우면 기존 키 유지" maxlength="256"></label>
+            <label>Secret Key<input name="secret_key" type="password" autocomplete="off" placeholder="비우면 기존 키 유지" maxlength="256"></label>
+          </div>
+        </fieldset>
+        <div class="bt-actions"><button id="real-exchange-save" type="submit" class="primary" disabled>연동 설정 저장</button><button id="real-exchange-reset" type="button">수정 취소</button><p id="real-exchange-message" class="muted" role="status"></p></div>
+      </form>
+    </section>
     <section class="panel real-panel"><div class="panel-head"><h3>업비트 실거래 · 실제 자금</h3><span id="real-state">상태 확인 중</span></div>
       <p id="real-guide" class="muted">서버의 업비트 연결 설정을 확인하고 있습니다.</p>
       <div class="buttons"><button id="real-connect">계좌 연결 확인</button><button id="real-test">주문 테스트 (미체결)</button><button id="real-stop">실거래 정지</button><button id="real-buy-toggle">신규 매수 중지</button></div>

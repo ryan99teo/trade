@@ -23,7 +23,7 @@ from test_trading import NOW, snapshot
 class NotificationTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory()
-        self.settings=Settings(db_path=Path(self.temp.name)/"paper.sqlite3",short_window=2,long_window=3)
+        self.settings=Settings(db_path=Path(self.temp.name)/"paper.sqlite3",short_window=2,long_window=3,candle_minutes=60)
         self.store=Store(self.settings)
         self.telegram=Telegram("private-token","private-chat")
         self.store.notifications_recipient=self.telegram.recipient

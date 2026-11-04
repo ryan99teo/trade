@@ -24,7 +24,7 @@ D=Decimal
 class AdditionalStrategyTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory()
-        self.base=Settings(db_path=Path(self.temp.name)/"paper.sqlite3")
+        self.base=Settings(db_path=Path(self.temp.name)/"paper.sqlite3",candle_minutes=60)
         self.store=Store(self.base)
 
     def tearDown(self):
@@ -43,6 +43,11 @@ class AdditionalStrategyTests(unittest.TestCase):
         self.assertEqual(allocation_signal(settings,candle,D(1),D(1),D(0))[0],"buy")
         candle=Candle(midnight,D("100000000"))
         self.assertEqual(allocation_signal(settings,candle,D(1),D(1),D(100))[0],"hold")
+        offset=replace(settings,dca_offset_minutes=35)
+        # 00:00-01:00 UTC candle contains 00:35; previous hour candle does not.
+        self.assertEqual(allocation_signal(offset,Candle(midnight-timedelta(hours=1),D(1)),D(1),D(1),D(0))[0],"hold")
+        self.assertEqual(allocation_signal(offset,Candle(midnight,D(1)),D(1),D(1),D(0))[0],"buy")
+        with self.assertRaises(ValueError):replace(settings,dca_offset_minutes=24*60)
         req=request(strategy="dca",dca_interval_hours=6,max_exposure="1",fee_rate="0",slippage="0")
         result=replay(req,fixture(req))
         self.assertEqual(len(result["fills"]),4)

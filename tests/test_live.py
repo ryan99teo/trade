@@ -34,6 +34,13 @@ class FakeExchange:
         self.placed=[];self.tested=[];self.cancelled=[];self.responses={}
         self.post_error=None;self.get_error=None
         self.krw="1000000";self.btc="1"
+        self._access="fake-access";self._secret="fake-secret"
+    def configure(self, access=None, secret=None, enabled=None):
+        if access is not None:self._access=access.strip()
+        if secret is not None:self._secret=secret.strip()
+        if enabled is not None:self.enabled=bool(enabled)
+        self.configured=bool(self._access and self._secret)
+        self.binding=hashlib.sha256(self._access.encode()).hexdigest() if self.configured else None
     def chance(self):
         return {"bid_fee":"0.0005","ask_fee":"0.0005", "bid_account":{"currency":"KRW","balance":self.krw,"locked":"0"},
                 "ask_account":{"currency":"BTC","balance":self.btc,"locked":"0"},
@@ -53,7 +60,7 @@ class FakeExchange:
 
 class LiveTests(unittest.TestCase):
     def setUp(self):
-        self.temp=tempfile.TemporaryDirectory();self.base=Settings(db_path=Path(self.temp.name)/"paper.sqlite3")
+        self.temp=tempfile.TemporaryDirectory();self.base=Settings(db_path=Path(self.temp.name)/"paper.sqlite3",candle_minutes=60)
         self.client=FakeExchange();self.live=LiveService(self.base,self.client)
         self.now=datetime.now(UTC)
         self.live.engine.quote_time=self.now
@@ -226,6 +233,36 @@ class LiveTests(unittest.TestCase):
             self.assertFalse(client.post("/api/live/control/stop",json={}).json()["running"])
             self.assertFalse(client.get("/api/status").json()["running"])
             self.assertFalse(self.client.placed)
+
+    def test_exchange_credentials_saved_in_ui_without_env_or_response_leak(self):
+        self.live.close()
+        exchange=UpbitExchange()
+        with TestClient(create_app(self.base,FakeMarket(),exchange=exchange)) as client:
+            for _ in range(100):
+                state=client.get("/api/live/status").json()
+                if state["quote_fresh"]:break
+                time.sleep(.01)
+            self.assertFalse(state["configured"])
+            self.assertFalse(state["enabled"])
+            self.assertFalse(state["keys_set"])
+            response=client.post("/api/live/exchange",json={
+                "enabled":True,"access_key":"ui-access","secret_key":"ui-secret"})
+            self.assertEqual(response.status_code,200,response.text)
+            body=response.json()
+            self.assertTrue(body["configured"])
+            self.assertTrue(body["enabled"])
+            self.assertTrue(body["keys_set"])
+            self.assertNotIn("ui-access",response.text)
+            self.assertNotIn("ui-secret",response.text)
+            self.assertTrue(exchange.configured)
+            self.assertTrue(exchange.enabled)
+            self.assertEqual(exchange.binding,hashlib.sha256(b"ui-access").hexdigest())
+            again=client.post("/api/live/exchange",json={"enabled":False})
+            self.assertEqual(again.status_code,200,again.text)
+            self.assertFalse(again.json()["enabled"])
+            self.assertTrue(again.json()["configured"])
+            self.assertTrue(exchange.configured)
+            self.assertFalse(exchange.enabled)
 
 
 class AuthenticationTests(unittest.TestCase):

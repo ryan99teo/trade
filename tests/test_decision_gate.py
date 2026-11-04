@@ -40,7 +40,7 @@ class DecisionGateUnitTests(unittest.TestCase):
     def setUp(self):
         self.settings = Settings(decision_gate_enabled=True, decision_threshold_buy=D("0.75"),
                                  decision_threshold_sell=D("0.60"), short_window=2, long_window=3,
-                                 openrouter_api_key="settings-key")
+                                 candle_minutes=60, openrouter_api_key="settings-key")
 
     def test_disabled_skips_without_network(self):
         transport = MagicMock(side_effect=AssertionError("should not call"))
@@ -116,7 +116,7 @@ class DecisionGateEngineTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.settings = Settings(db_path=Path(self.temp.name)/"test.sqlite3", short_window=2, long_window=3,
-                                 decision_gate_enabled=True, openrouter_api_key="stored-key")
+                                 candle_minutes=60, decision_gate_enabled=True, openrouter_api_key="stored-key")
         self.store = Store(self.settings)
 
     def tearDown(self):
@@ -191,7 +191,7 @@ class DecisionGateEngineTests(unittest.TestCase):
         self.assertNotIn("openrouter_api_key", status["settings"])
         self.assertNotIn("sk-live-secret", json.dumps(status))
         self.store.db.close()
-        reloaded = Store(Settings(db_path=self.settings.db_path, short_window=2, long_window=3))
+        reloaded = Store(Settings(db_path=self.settings.db_path, short_window=2, long_window=3, candle_minutes=60))
         self.assertTrue(reloaded.settings.decision_gate_enabled)
         self.assertEqual(reloaded.settings.openrouter_api_key, "sk-live-secret")
         self.assertEqual(reloaded.settings.decision_threshold_buy, D("0.80"))

@@ -4,7 +4,8 @@ from decimal import Decimal
 from pathlib import Path
 
 STRATEGY_NAMES = {"ma_cross": "이동평균 교차", "dca": "정액 분할매수", "rebalance": "목표 비중 리밸런싱"}
-NEW_STRATEGY_FIELDS = ("strategy", "dca_interval_hours", "target_exposure", "rebalance_tolerance")
+NEW_STRATEGY_FIELDS = ("strategy", "dca_interval_hours", "dca_offset_minutes",
+                       "target_exposure", "rebalance_tolerance")
 DECISION_FIELDS = ("decision_gate_enabled", "decision_threshold_buy", "decision_threshold_sell",
                    "decision_timeout_seconds", "openrouter_api_key")
 EDITABLE_FIELDS = (("short_window", "long_window", "order_krw", "max_exposure", "daily_loss_limit")
@@ -37,11 +38,12 @@ class Settings:
     slippage: Decimal = Decimal("0.001")
     short_window: int = 5
     long_window: int = 20
-    candle_minutes: int = 60
+    candle_minutes: int = 5
     poll_seconds: int = 30
     max_quote_age_seconds: int = 60
     strategy: str = "ma_cross"
     dca_interval_hours: int = 24
+    dca_offset_minutes: int = 0
     target_exposure: Decimal = Decimal("0.20")
     rebalance_tolerance: Decimal = Decimal("0.02")
     decision_gate_enabled: bool = False
@@ -71,6 +73,8 @@ class Settings:
             raise ValueError("지원하지 않는 전략입니다.")
         if self.dca_interval_hours not in (1,4,6,12,24,48,168):
             raise ValueError("분할매수 주기는 1·4·6·12·24·48·168시간 중 선택하세요.")
+        if not 0 <= self.dca_offset_minutes < self.dca_interval_hours * 60:
+            raise ValueError("분할매수 시작 분은 0 이상이며 주기(분)보다 작아야 합니다.")
         if not 0 < self.target_exposure <= 1 or not 0 < self.rebalance_tolerance < 1:
             raise ValueError("목표 비중과 리밸런싱 허용 편차를 확인하세요.")
         if self.strategy == "dca" and self.dca_interval_hours * 60 % self.candle_minutes:

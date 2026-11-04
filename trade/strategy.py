@@ -4,9 +4,13 @@ from decimal import Decimal
 
 def allocation_signal(settings, candle, mark, equity, btc):
     if settings.strategy == "dca":
-        # A fixed UTC epoch anchor is identical in live replay and backtests.
-        boundary = candle.time + timedelta(minutes=settings.candle_minutes)
-        due = int(boundary.timestamp()) % (settings.dca_interval_hours * 3600) == 0
+        # UTC epoch + offset: fire on the closed candle that contains the schedule instant.
+        start = int(candle.time.timestamp())
+        end = int((candle.time + timedelta(minutes=settings.candle_minutes)).timestamp())
+        period = settings.dca_interval_hours * 3600
+        offset = settings.dca_offset_minutes * 60
+        due_at = end - ((end - offset) % period)
+        due = start < due_at <= end
         return ("buy", "정액 분할매수 예약 시각입니다.") if due else ("hold", "다음 정액 분할매수 시각을 기다립니다.")
     ratio = btc * mark / equity if equity > 0 else Decimal(0)
     target, tolerance = settings.target_exposure, settings.rebalance_tolerance

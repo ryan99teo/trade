@@ -20,7 +20,7 @@ class FakeMarket:
 class ApiTests(unittest.TestCase):
     def test_controls_status_static_and_restart(self):
         with tempfile.TemporaryDirectory() as tmp:
-            settings = Settings(db_path=Path(tmp)/"db.sqlite3")
+            settings = Settings(db_path=Path(tmp)/"db.sqlite3", candle_minutes=60)
             app = create_app(settings, FakeMarket())
             with TestClient(app) as client:
                 self.assertEqual(client.get("/").status_code, 200)
@@ -47,7 +47,7 @@ class ApiTests(unittest.TestCase):
 
     def test_second_worker_cannot_open_same_account(self):
         with tempfile.TemporaryDirectory() as tmp:
-            settings = Settings(db_path=Path(tmp)/"db.sqlite3")
+            settings = Settings(db_path=Path(tmp)/"db.sqlite3", candle_minutes=60)
             with TestClient(create_app(settings, FakeMarket())):
                 with self.assertRaises(RuntimeError):
                     with TestClient(create_app(settings, FakeMarket())):

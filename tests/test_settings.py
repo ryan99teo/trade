@@ -31,7 +31,7 @@ def values(**kwargs):
 class SettingsTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.base = Settings(db_path=Path(self.temp.name)/"paper.sqlite3",short_window=2,long_window=3)
+        self.base = Settings(db_path=Path(self.temp.name)/"paper.sqlite3",short_window=2,long_window=3,candle_minutes=60)
         self.store = Store(self.base)
         self.engine = Engine(self.base,self.store)
 

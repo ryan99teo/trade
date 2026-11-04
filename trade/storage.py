@@ -61,6 +61,8 @@ class Store:
             old_values = json.loads(old)
             for key in NEW_STRATEGY_FIELDS:
                 old_values.setdefault(key,str(getattr(Settings(),key)))
+            # Allow upgrading the default candle size (e.g. 60 → 5) without a new DB path.
+            old_values["candle_minutes"] = str(settings.candle_minutes)
             compatible_old = json.dumps(old_values,sort_keys=True)
         if old is not None and compatible_old != current_fingerprint:
             self.db.close()
@@ -80,6 +82,7 @@ class Store:
         labels = {"short_window": "단기 이동평균", "long_window": "장기 이동평균",
                   "order_krw": "주문 금액", "max_exposure": "최대 BTC 비중", "daily_loss_limit": "일일 손실 한도",
                   "strategy":"전략", "dca_interval_hours":"분할매수 주기(시간)",
+                  "dca_offset_minutes":"분할매수 시작 분",
                   "target_exposure":"목표 BTC 비중", "rebalance_tolerance":"허용 편차",
                   "decision_gate_enabled":"디시젼 게이트", "decision_threshold_buy":"매수 게이트 임계값",
                   "decision_threshold_sell":"매도 게이트 임계값", "decision_timeout_seconds":"게이트 제한시간(초)",

@@ -241,6 +241,7 @@ class Engine:
                              "fee_rate": str(s.fee_rate), "slippage": str(s.slippage),
                              "short_window": s.short_window, "long_window": s.long_window,
                              "strategy":s.strategy, "dca_interval_hours":s.dca_interval_hours,
+                             "dca_offset_minutes": s.dca_offset_minutes,
                              "target_exposure":str(s.target_exposure),"rebalance_tolerance":str(s.rebalance_tolerance),
                              "decision_gate_enabled": s.decision_gate_enabled,
                              "decision_threshold_buy": str(s.decision_threshold_buy),

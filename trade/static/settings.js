@@ -7,7 +7,7 @@
   function notify(text, error=false) {message.textContent=text;message.classList.toggle('negative',error);}
   function fill() {
     if(!current)return;
-    for(const name of ['strategy','dca_interval_hours','short_window','long_window','order_krw'])form.elements[name].value=current.settings[name];
+    for(const name of ['strategy','dca_interval_hours','dca_offset_minutes','short_window','long_window','order_krw'])form.elements[name].value=current.settings[name];
     for(const name of ['max_exposure','daily_loss_limit','target_exposure','rebalance_tolerance'])form.elements[name].value=Number((Number(current.settings[name])*100).toFixed(6));
     form.elements.order_krw.max=current.settings.initial_cash;
   }
@@ -31,7 +31,7 @@
     event.preventDefault();if(saving||!current||current.running||!online)return;
     if(Number(form.elements.short_window.value)>=Number(form.elements.long_window.value)){notify('단기 이동평균은 장기 이동평균보다 작아야 합니다.',true);return;}
     const payload=Object.fromEntries(new FormData(form));
-    for(const name of ['short_window','long_window','dca_interval_hours'])payload[name]=Number(payload[name]);
+    for(const name of ['short_window','long_window','dca_interval_hours','dca_offset_minutes'])payload[name]=Number(payload[name]);
     for(const name of ['max_exposure','daily_loss_limit','target_exposure','rebalance_tolerance'])payload[name]=(Number(payload[name])/100).toFixed(8);
     saving=true;controls();notify('설정을 저장하고 있습니다.');
     try {

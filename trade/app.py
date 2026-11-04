@@ -34,6 +34,7 @@ class StrategyUpdate(BaseModel):
     daily_loss_limit: Decimal = Field(gt=0, lt=1)
     strategy: Optional[Literal["ma_cross","dca","rebalance"]] = None
     dca_interval_hours: Optional[int] = Field(default=None,ge=1,le=168,strict=True)
+    dca_offset_minutes: Optional[int] = Field(default=None, ge=0, le=10079, strict=True)
     target_exposure: Optional[Decimal] = Field(default=None,gt=0,le=1)
     rebalance_tolerance: Optional[Decimal] = Field(default=None,gt=0,lt=1)
 
@@ -52,12 +53,19 @@ class LiveStart(BaseModel):
     acknowledge_real_orders: Literal[True]
 
 
+class LiveExchangeUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+    access_key: Optional[str] = Field(default=None, max_length=256)
+    secret_key: Optional[str] = Field(default=None, max_length=256)
+
+
 def create_app(settings=None, market=None, history_market=None, telegram=None, exchange=None):
     settings = settings or Settings.from_env()
     market = market or UpbitPublic()
     history_market = history_market or UpbitPublic()
     telegram = telegram or Telegram.from_env()
-    exchange = exchange or UpbitExchange.from_env()
+    exchange = exchange or UpbitExchange()
     archive_path = settings.db_path.with_name(settings.db_path.stem + "-backtests.sqlite3")
     backtest_lock = None
 
@@ -182,6 +190,20 @@ def create_app(settings=None, market=None, history_market=None, telegram=None, e
 
     @app.get("/api/live/status")
     async def live_status():return app.state.live.status()
+
+    @app.post("/api/live/exchange")
+    async def live_exchange(request: LiveExchangeUpdate):
+        live = app.state.live
+        async with live.lock:
+            try:
+                live.configure_exchange(
+                    enabled=request.enabled,
+                    access_key=request.access_key,
+                    secret_key=request.secret_key,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return live.status()
 
     @app.post("/api/live/connect")
     async def live_connect():

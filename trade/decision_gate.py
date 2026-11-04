@@ -77,6 +77,7 @@ def build_state(side, reason, settings, mark, cash, btc, equity, baseline, candl
         "short_window": settings.short_window,
         "long_window": settings.long_window,
         "dca_interval_hours": settings.dca_interval_hours,
+        "dca_offset_minutes": settings.dca_offset_minutes,
         "target_exposure": str(settings.target_exposure),
         "rebalance_tolerance": str(settings.rebalance_tolerance),
         "recent_closes": closes,

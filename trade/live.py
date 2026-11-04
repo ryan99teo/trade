@@ -4,8 +4,8 @@ import fcntl
 from dataclasses import replace
 from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_CEILING, ROUND_DOWN
+import hashlib
 import json
-import os
 from pathlib import Path
 import uuid
 
@@ -36,10 +36,13 @@ class IntentEngine(Engine):
 
 
 class LiveService:
+    DEFAULT_BUDGET = D("100000")
+    DEFAULT_ORDER_CAP = D("10000")
+
     def __init__(self, paper_settings, client, budget=None, order_cap=None):
         self.client=client
-        self.budget=amount(budget if budget is not None else os.getenv("TRADE_LIVE_BUDGET_KRW","100000"))
-        self.order_cap=amount(order_cap if order_cap is not None else os.getenv("TRADE_LIVE_ORDER_CAP_KRW","10000"))
+        self.budget=amount(budget if budget is not None else self.DEFAULT_BUDGET)
+        self.order_cap=amount(order_cap if order_cap is not None else self.DEFAULT_ORDER_CAP)
         if not 5000<=self.order_cap<=self.budget:raise ValueError("실거래 예산·주문 한도는 5,000원 이상이며 주문 한도는 예산 이하여야 합니다.")
         settings=replace(paper_settings,db_path=paper_settings.db_path.with_name(paper_settings.db_path.stem+"-live.sqlite3"),
                          initial_cash=self.budget,order_krw=min(paper_settings.order_krw,self.order_cap))
@@ -70,7 +73,60 @@ class LiveService:
         self.chance=None
         self.tick=None
         self._lock=None
-        self.binding_ok=not self.store.get("exchange_binding") or self.store.get("exchange_binding")==client.binding
+        self._restore_exchange()
+        self.binding_ok=not self.store.get("exchange_binding") or self.store.get("exchange_binding")==self.client.binding
+
+    def _restore_exchange(self):
+        """Apply UI-saved credentials from the live ledger. Leave injected test clients alone when unset."""
+        access = self.store.get("upbit_access_key")
+        secret = self.store.get("upbit_secret_key")
+        enabled = self.store.get("live_enabled")
+        if access is None and secret is None and enabled is None:
+            return
+        if not hasattr(self.client, "configure"):
+            return
+        kwargs = {}
+        if access is not None:
+            kwargs["access"] = access
+        if secret is not None:
+            kwargs["secret"] = secret
+        if enabled is not None:
+            kwargs["enabled"] = enabled == "1"
+        self.client.configure(**kwargs)
+
+    def configure_exchange(self, *, enabled, access_key=None, secret_key=None):
+        if self.engine.running or self.active():
+            raise ValueError("실거래를 정지하고 미해결 주문을 확인한 뒤 연동 설정을 변경하세요.")
+        if not hasattr(self.client, "configure"):
+            raise ValueError("업비트 연동 클라이언트를 설정할 수 없습니다.")
+        access = (access_key if access_key is not None and str(access_key).strip()
+                  else self.store.get("upbit_access_key", "") or "")
+        secret = (secret_key if secret_key is not None and str(secret_key).strip()
+                  else self.store.get("upbit_secret_key", "") or "")
+        access, secret = str(access).strip(), str(secret).strip()
+        if bool(access) != bool(secret):
+            raise ValueError("Access Key와 Secret Key를 함께 설정하세요.")
+        if enabled and not (access and secret):
+            raise ValueError("실거래를 켜려면 업비트 API 키가 필요합니다.")
+        new_binding = hashlib.sha256(access.encode()).hexdigest() if access and secret else None
+        stored_binding = self.store.get("exchange_binding")
+        if stored_binding and new_binding and stored_binding != new_binding:
+            raise ValueError("기존 실거래 기록과 API 키가 다릅니다. 기존 계좌 확인이 필요합니다.")
+        now = datetime.now(UTC).isoformat()
+        with self.store.db:
+            self.store.set("upbit_access_key", access)
+            self.store.set("upbit_secret_key", secret)
+            self.store.set("live_enabled", "1" if enabled else "0")
+            self.store.event(now, "live_settings",
+                             "업비트 연동 설정 변경: 실거래 {} · API 키 {}".format(
+                                 "활성" if enabled else "비활성", "설정됨" if access and secret else "미설정"))
+        self.client.configure(access=access, secret=secret, enabled=enabled)
+        self.binding_ok = not stored_binding or not self.client.binding or stored_binding == self.client.binding
+        self.connected_at = None
+        self.tested_at = None
+        self.chance = None
+        self.tick = None
+        self.error = None
 
     def close(self):
         self.store.db.close()
@@ -176,7 +232,7 @@ class LiveService:
         return {"tested_at":self.tested_at.isoformat(),"message":"주문 형식 검증 완료. 실제 주문은 생성하지 않았습니다."}
 
     def start(self):
-        if not self.client.enabled:raise ValueError("TRADE_LIVE_ENABLED=true 설정이 필요합니다.")
+        if not self.client.enabled:raise ValueError("실거래 탭에서 실제 주문을 활성화하세요.")
         if not self.binding_ok or self.error or not self.account_fresh():raise ValueError("계좌 연결 상태를 먼저 확인하세요.")
         if self.tested_at is None or (datetime.now(UTC)-self.tested_at).total_seconds()>300:raise ValueError("최근 5분 이내의 주문 테스트가 필요합니다.")
         if self.active():raise ValueError("미해결 주문을 먼저 확인하세요.")
@@ -285,6 +341,7 @@ class LiveService:
     def status(self):
         result=self.engine.status()
         result.update(mode="live",configured=self.client.configured,enabled=self.client.enabled,
+                      keys_set=bool((self.store.get("upbit_access_key") or "") and (self.store.get("upbit_secret_key") or "")),
                       connected=self.account_fresh() and self.binding_ok,error=self.error,
                       connected_at=self.connected_at.isoformat() if self.connected_at else None,
                       tested_at=self.tested_at.isoformat() if self.tested_at else None,

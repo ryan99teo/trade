@@ -185,7 +185,7 @@ class BacktestTests(unittest.TestCase):
 
     def test_api_result_restore_csv_and_paper_account_isolation(self):
         with tempfile.TemporaryDirectory() as tmp:
-            settings=Settings(db_path=Path(tmp)/"paper.sqlite3")
+            settings=Settings(db_path=Path(tmp)/"paper.sqlite3",candle_minutes=60)
             app=create_app(settings,FakeMarket(),HistoryMarket(fixture()))
             with TestClient(app) as client:
                 before=client.get("/api/status").json()
@@ -216,7 +216,7 @@ class BacktestTests(unittest.TestCase):
             return original(path)
         market._get = delayed
         with tempfile.TemporaryDirectory() as tmp:
-            app = create_app(Settings(db_path=Path(tmp)/"paper.sqlite3"), FakeMarket(), market)
+            app = create_app(Settings(db_path=Path(tmp)/"paper.sqlite3",candle_minutes=60), FakeMarket(), market)
             with TestClient(app) as client, ThreadPoolExecutor(max_workers=1) as pool:
                 pending = pool.submit(client.post, "/api/backtests", json=request().model_dump(mode="json"))
                 try:

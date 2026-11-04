@@ -1,8 +1,9 @@
 (() => {
   const get=id=>document.getElementById(id),form=get('real-settings');
   get('real-fields').append(document.querySelector('#strategy-fields .bt-fields').cloneNode(true));
-  let current=null,busy=false,dirty=false,gateDirty=false;
+  let current=null,busy=false,dirty=false,gateDirty=false,exchangeDirty=false;
   const gateForm=get('real-decision-gate-form');
+  const exchangeForm=get('real-exchange-form');
   const states={prepared:'접수 준비',submitting:'접수 확인 중',unknown:'접수 불명 · 새 주문 중지',wait:'체결 대기',watch:'예약 대기',cancel_pending:'취소 확인 중',done:'체결 완료',cancel:'취소 완료',aborted:'미전송 폐기',rejected:'주문 거부'};
   const active=new Set(['prepared','submitting','unknown','wait','watch','cancel_pending']);
   async function api(path,body){const response=await fetch('/api/live/'+path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),data=await response.json();if(!response.ok)throw new Error(Array.isArray(data.detail)?data.detail.map(d=>d.msg).join(' / '):data.detail||'실거래 요청을 처리하지 못했습니다.');return data;}
@@ -17,8 +18,12 @@
     get('real-decision-gate-fields').disabled=locked();
     get('real-decision-gate-save').disabled=get('real-decision-gate-fields').disabled||!gateDirty;
     get('real-decision-gate-reset').disabled=busy||!gateDirty;
+    get('real-exchange-fields').disabled=locked();
+    get('real-exchange-save').disabled=get('real-exchange-fields').disabled||!exchangeDirty;
+    get('real-exchange-reset').disabled=busy||!exchangeDirty;
     const gate=current?.decision_gate||{};
     get('real-decision-gate-state').textContent=!current?'상태 확인 중':locked()?'수정 잠김':(gate.enabled?(gate.configured?'사용 중':'사용 · 키 필요'):'꺼짐 · 수정 가능');
+    get('real-exchange-state').textContent=!current?'상태 확인 중':locked()?'수정 잠김':(current.configured?(current.enabled?'키 설정됨 · 실제 주문 활성':'키 설정됨 · 실제 주문 비활성'):'키 미설정');
   }
   function fillGate(data){
     const cfg=data.settings;
@@ -29,15 +34,24 @@
     gateForm.elements.openrouter_api_key.value='';
     gateForm.elements.openrouter_api_key.placeholder=cfg.openrouter_api_key_set?'저장됨 · 비우면 유지':'비우면 기존 키 유지';
   }
+  function fillExchange(data){
+    exchangeForm.elements.enabled.value=String(!!data.enabled);
+    exchangeForm.elements.access_key.value='';
+    exchangeForm.elements.secret_key.value='';
+    const keep=data.keys_set?'저장됨 · 비우면 유지':'비우면 기존 키 유지';
+    exchangeForm.elements.access_key.placeholder=keep;
+    exchangeForm.elements.secret_key.placeholder=keep;
+  }
   function show(data){
     current=data;get('real-state').textContent=data.running?'실거래 실행 중':data.enabled?'실거래 정지':'실거래 비활성화';
-    get('real-guide').textContent=!data.configured?'서버 환경변수 UPBIT_ACCESS_KEY · UPBIT_SECRET_KEY를 설정하세요. 실제 주문에는 TRADE_LIVE_ENABLED=true가 추가로 필요합니다.':data.error||(!data.enabled?'조회·주문 테스트만 가능합니다. 실제 주문은 서버 활성화 설정 후 시작할 수 있습니다.':'계좌 연결 확인 → 주문 테스트 → 실제 주문 동의 → 실거래 시작 순서로 실행하세요.');
+    get('real-guide').textContent=!data.configured?'위에서 업비트 Access Key · Secret Key를 저장한 뒤 계좌 연결을 확인하세요.':data.error||(!data.enabled?'조회·주문 테스트만 가능합니다. 실제 주문을 쓰려면 업비트 연동에서 실제 주문 활성화를 켜세요.':'계좌 연결 확인 → 주문 테스트 → 실제 주문 동의 → 실거래 시작 순서로 실행하세요.');
     get('real-budget').textContent=won(data.budget);get('real-cap').textContent='1회 매수 상한 '+won(data.order_cap);
     get('real-cash').textContent=won(data.cash);get('real-btc').textContent=Number(data.btc).toFixed(8);get('real-pnl').textContent=won(data.total_pnl);color(get('real-pnl'),data.total_pnl);
     get('real-available').textContent=data.available_krw===null?'계좌 조회 전':'업비트 사용 가능 원화 '+won(data.available_krw);
     get('real-buy-toggle').textContent=data.buy_halted?'신규 매수 재개':'신규 매수 중지';
-    if(!dirty){for(const name of ['strategy','dca_interval_hours','short_window','long_window','order_krw'])form.elements[name].value=data.settings[name];for(const name of ['max_exposure','daily_loss_limit','target_exposure','rebalance_tolerance'])form.elements[name].value=Number(data.settings[name])*100;}
+    if(!dirty){for(const name of ['strategy','dca_interval_hours','dca_offset_minutes','short_window','long_window','order_krw'])form.elements[name].value=data.settings[name];for(const name of ['max_exposure','daily_loss_limit','target_exposure','rebalance_tolerance'])form.elements[name].value=Number(data.settings[name])*100;}
     if(!gateDirty)fillGate(data);
+    if(!exchangeDirty)fillExchange(data);
     form.elements.order_krw.max=data.order_cap;
     get('real-orders').replaceChildren(...data.orders.map(order=>{
       const tr=document.createElement('tr');for(const value of [time(order.created_at),order.side==='buy'?'매수':'매도',states[order.state]||order.state,Number(order.quantity).toFixed(8),won(order.funds),won(order.fee)]){const td=document.createElement('td');td.textContent=value;tr.append(td);}
@@ -57,7 +71,7 @@
   get('real-buy-toggle').addEventListener('click',()=>perform('control/'+(current?.buy_halted?'resume_buys':'pause_buys'),{}));
   get('real-ack').addEventListener('change',controls);form.addEventListener('input',()=>{dirty=true;controls();});
   form.addEventListener('submit',async event=>{
-    event.preventDefault();if(busy)return;const payload=Object.fromEntries(new FormData(form));for(const name of ['short_window','long_window','dca_interval_hours'])payload[name]=Number(payload[name]);for(const name of ['max_exposure','daily_loss_limit','target_exposure','rebalance_tolerance'])payload[name]=(Number(payload[name])/100).toFixed(8);
+    event.preventDefault();if(busy)return;const payload=Object.fromEntries(new FormData(form));for(const name of ['short_window','long_window','dca_interval_hours','dca_offset_minutes'])payload[name]=Number(payload[name]);for(const name of ['max_exposure','daily_loss_limit','target_exposure','rebalance_tolerance'])payload[name]=(Number(payload[name])/100).toFixed(8);
     busy=true;controls();try{const data=await api('settings',payload);dirty=false;show(data);get('real-settings-message').textContent='실거래 설정을 저장했습니다. 주문 테스트를 다시 실행하세요.';}catch(error){get('real-settings-message').textContent=error.message;}finally{busy=false;await refresh();}
   });
   gateForm.addEventListener('input',()=>{gateDirty=true;controls();get('real-decision-gate-message').textContent='저장하지 않은 변경 사항이 있습니다.';});
@@ -73,6 +87,18 @@
     busy=true;controls();get('real-decision-gate-message').textContent='게이트 설정을 저장하고 있습니다.';
     try{const data=await api('decision-gate',payload);gateDirty=false;show(data);get('real-decision-gate-message').textContent='실거래 게이트 설정을 저장했습니다.';}
     catch(error){get('real-decision-gate-message').textContent=error.message;}finally{busy=false;await refresh();}
+  });
+  exchangeForm.addEventListener('input',()=>{exchangeDirty=true;controls();get('real-exchange-message').textContent='저장하지 않은 변경 사항이 있습니다.';});
+  get('real-exchange-reset').addEventListener('click',()=>{if(!current)return;exchangeDirty=false;fillExchange(current);controls();get('real-exchange-message').textContent='현재 저장된 설정으로 되돌렸습니다.';});
+  exchangeForm.addEventListener('submit',async event=>{
+    event.preventDefault();if(busy||locked())return;
+    const payload=Object.fromEntries(new FormData(exchangeForm));
+    payload.enabled=payload.enabled==='true';
+    if(!payload.access_key)delete payload.access_key;
+    if(!payload.secret_key)delete payload.secret_key;
+    busy=true;controls();get('real-exchange-message').textContent='연동 설정을 저장하고 있습니다.';
+    try{const data=await api('exchange',payload);exchangeDirty=false;show(data);get('real-exchange-message').textContent='업비트 연동 설정을 저장했습니다. 계좌 연결과 주문 테스트를 다시 실행하세요.';}
+    catch(error){get('real-exchange-message').textContent=error.message;}finally{busy=false;await refresh();}
   });
   refresh();setInterval(refresh,5000);
 })();

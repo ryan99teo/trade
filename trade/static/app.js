@@ -2,7 +2,7 @@ const $ = id => document.getElementById(id);
 const won = value => new Intl.NumberFormat('ko-KR', {maximumFractionDigits:0}).format(Number(value)) + '원';
 const time = value => value ? new Date(value).toLocaleString('ko-KR', {timeZone:'Asia/Seoul',hour12:false}) : '—';
 const strategyNames={ma_cross:'이동평균 교차',dca:'정액 분할매수',rebalance:'목표 비중 리밸런싱'};
-function strategyLabel(cfg){const name=cfg.strategy||'ma_cross';return name==='dca'?`정액 분할매수 · ${cfg.dca_interval_hours||24}시간`:name==='rebalance'?`리밸런싱 · 목표 ${Number(cfg.target_exposure||.2)*100}% ±${Number(cfg.rebalance_tolerance||.02)*100}%p`:`이동평균 교차 · MA ${cfg.short_window}/${cfg.long_window}`;}
+function strategyLabel(cfg){const name=cfg.strategy||'ma_cross';const offset=Number(cfg.dca_offset_minutes||0);return name==='dca'?`정액 분할매수 · ${cfg.dca_interval_hours||24}시간`+(offset?` · +${offset}분`:''):name==='rebalance'?`리밸런싱 · 목표 ${Number(cfg.target_exposure||.2)*100}% ±${Number(cfg.rebalance_tolerance||.02)*100}%p`:`이동평균 교차 · MA ${cfg.short_window}/${cfg.long_window}`;}
 let busy = false, history = [], marketError = false;
 function color(el, value) { el.classList.toggle('positive', Number(value)>0); el.classList.toggle('negative', Number(value)<0); }
 function empty(el, message) { const p=document.createElement('p'); p.className='empty'; p.textContent=message; el.replaceChildren(p); }

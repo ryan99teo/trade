@@ -34,13 +34,24 @@ class UpbitExchange:
     def __init__(self, access="", secret="", enabled=False):
         self._access,self._secret=access.strip(),secret.strip()
         self.configured=bool(self._access and self._secret)
-        self.enabled=enabled
+        self.enabled=bool(enabled)
         self.binding=hashlib.sha256(self._access.encode()).hexdigest() if self.configured else None
         self._lock=threading.Lock()
         self._next_request=0
 
+    def configure(self, access=None, secret=None, enabled=None):
+        if access is not None:
+            self._access = access.strip()
+        if secret is not None:
+            self._secret = secret.strip()
+        if enabled is not None:
+            self.enabled = bool(enabled)
+        self.configured = bool(self._access and self._secret)
+        self.binding = hashlib.sha256(self._access.encode()).hexdigest() if self.configured else None
+
     @classmethod
     def from_env(cls):
+        # Kept for tests/tools; the app loads credentials from the live DB UI settings.
         return cls(os.getenv("UPBIT_ACCESS_KEY",""),os.getenv("UPBIT_SECRET_KEY",""),
                    os.getenv("TRADE_LIVE_ENABLED","false").lower()=="true")
 

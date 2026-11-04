@@ -38,6 +38,7 @@ class BacktestRequest(BaseModel):
     daily_loss_limit: Decimal = Field(default=D("0.03"), gt=0, lt=1)
     strategy: Literal["ma_cross","dca","rebalance"] = "ma_cross"
     dca_interval_hours: int = Field(default=24,ge=1,le=168)
+    dca_offset_minutes: int = Field(default=0, ge=0, le=10079)
     target_exposure: Decimal = Field(default=D("0.20"),gt=0,le=1)
     rebalance_tolerance: Decimal = Field(default=D("0.02"),gt=0,lt=1)
 
@@ -58,8 +59,8 @@ class BacktestRequest(BaseModel):
                         short_window=self.short_window, long_window=self.long_window,
                         fee_rate=self.fee_rate, slippage=self.slippage, max_exposure=self.max_exposure,
                         daily_loss_limit=self.daily_loss_limit, candle_minutes=60,strategy=self.strategy,
-                        dca_interval_hours=self.dca_interval_hours,target_exposure=self.target_exposure,
-                        rebalance_tolerance=self.rebalance_tolerance)
+                        dca_interval_hours=self.dca_interval_hours,dca_offset_minutes=self.dca_offset_minutes,
+                        target_exposure=self.target_exposure,rebalance_tolerance=self.rebalance_tolerance)
 
 
 @dataclass(frozen=True)

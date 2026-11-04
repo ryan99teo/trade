@@ -24,7 +24,7 @@ def snapshot(prices=(100, 100, 90, 120), now=NOW, mark="100000000"):
 class TradingTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.settings = Settings(db_path=Path(self.temp.name)/"test.sqlite3", short_window=2, long_window=3)
+        self.settings = Settings(db_path=Path(self.temp.name)/"test.sqlite3", short_window=2, long_window=3, candle_minutes=60)
         self.store = Store(self.settings)
         self.engine = Engine(self.settings, self.store)
 

@@ -82,7 +82,7 @@
     submitting=true;get('bt-run').disabled=true;get('bt-compare').disabled=true;get('bt-run').textContent='수집 · 계산 중…';
     message('과거 캔들을 수집하고 계산하고 있습니다. 기간에 따라 수십 초 걸릴 수 있습니다.');
     const payload=Object.fromEntries(new FormData(form));
-    for(const key of ['short_window','long_window','dca_interval_hours'])payload[key]=Number(payload[key]);
+    for(const key of ['short_window','long_window','dca_interval_hours','dca_offset_minutes'])payload[key]=Number(payload[key]);
     for(const key of ['fee_rate','slippage','max_exposure','daily_loss_limit','target_exposure','rebalance_tolerance'])payload[key]=(Number(payload[key])/100).toFixed(8);
     try{const data=await jsonFetch('/api/backtests'+(compare?'/compare':''),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const selected=compare?data.runs[0]:data;if(compare)showComparison(data.runs);else get('bt-comparison').hidden=true;show(selected);await loadHistory(selected.id);message((compare?'세 전략 비교 완료':'백테스트 완료')+' · 결과를 저장했습니다. 과거 성과는 미래 수익을 보장하지 않습니다.');}
     catch(e){message(e.message,true);}finally{submitting=false;get('bt-run').disabled=false;get('bt-compare').disabled=false;get('bt-run').textContent='백테스트 실행';}
