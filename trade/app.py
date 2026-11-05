@@ -16,9 +16,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from .config import Settings
 from .engine import Engine
 from .market import MarketError, UpbitPublic, UTC
-from .notifications import Telegram, delivery_loop, status as notification_status
+from .notifications import (Telegram, delivery_loop, restore as restore_telegram,
+                            save as save_telegram, status as notification_status)
 from .exchange import UpbitExchange, ExchangeError
 from .live import LiveService
+from .seconds import UpbitSeconds
 from .storage import Store
 from .backtest import BacktestRequest, compare_backtests, fills_csv, read_archive, run_backtest
 
@@ -32,7 +34,13 @@ class StrategyUpdate(BaseModel):
     order_krw: Decimal = Field(ge=5000)
     max_exposure: Decimal = Field(gt=0, le=1)
     daily_loss_limit: Decimal = Field(gt=0, lt=1)
-    strategy: Optional[Literal["ma_cross","dca","rebalance"]] = None
+    strategy: Optional[Literal["ma_cross","dca","rebalance","consecutive"]] = None
+    candle_minutes: Optional[Literal[1,3,5,10,15,30,60,240]] = None
+    consecutive_seconds: Optional[Literal[10,30,60]] = None
+    consecutive_count: Optional[int] = Field(default=None, ge=1, le=199, strict=True)
+    consecutive_entry_return: Optional[Decimal] = Field(default=None,gt=0,lt=1)
+    consecutive_take_profit: Optional[Decimal] = Field(default=None,gt=0,lt=1)
+    consecutive_stop_loss: Optional[Decimal] = Field(default=None,gt=0,lt=1)
     dca_interval_hours: Optional[int] = Field(default=None,ge=1,le=168,strict=True)
     dca_offset_minutes: Optional[int] = Field(default=None, ge=0, le=10079, strict=True)
     target_exposure: Optional[Decimal] = Field(default=None,gt=0,le=1)
@@ -53,6 +61,13 @@ class LiveStart(BaseModel):
     acknowledge_real_orders: Literal[True]
 
 
+class TelegramUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+    bot_token: Optional[str] = Field(default=None, max_length=256)
+    chat_id: Optional[str] = Field(default=None, max_length=64)
+
+
 class LiveExchangeUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     enabled: bool
@@ -64,28 +79,62 @@ def create_app(settings=None, market=None, history_market=None, telegram=None, e
     settings = settings or Settings.from_env()
     market = market or UpbitPublic()
     history_market = history_market or UpbitPublic()
-    telegram = telegram or Telegram.from_env()
+    telegram = telegram or Telegram()
     exchange = exchange or UpbitExchange()
     archive_path = settings.db_path.with_name(settings.db_path.stem + "-backtests.sqlite3")
     backtest_lock = None
 
+    async def process_paper(engine, snapshot):
+        try:await engine.process_async(snapshot)
+        except Exception:
+            log.exception("Paper processing failed")
+            engine.fail("모의매매 처리 오류: 서버 로그를 확인하세요.")
+
+    async def process_live(live,snapshot):
+        try:await live.on_snapshot_async(snapshot)
+        except Exception:live.fail("실거래 시세 처리 오류가 발생했습니다.")
+
     async def collect(engine):
         while True:
-            delay = settings.poll_seconds
-            try:
-                snapshot = await asyncio.to_thread(market.fetch, settings.candle_minutes)
-                engine.process(snapshot)
-                try:app.state.live.on_snapshot(snapshot)
-                except Exception:app.state.live.fail("실거래 시세 처리 오류가 발생했습니다.")
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                log.exception("Market collection failed")
-                engine.fail(str(exc) if isinstance(exc, MarketError) else "수집 또는 처리 오류: 서버 로그를 확인하세요.")
-                app.state.live.fail("공개 시세 수신 오류로 실거래를 정지했습니다.")
-                if isinstance(exc, MarketError):
-                    delay = max(delay, exc.retry_after)
+            live=app.state.live
+            delay = 10 if any(e.settings.strategy=="consecutive" for e in (engine,live.engine)) else settings.poll_seconds
+            for minutes in dict.fromkeys(e.settings.candle_minutes for e in (engine,live.engine) if e.settings.bar_seconds >= 60):
+                try:
+                    snapshot = await asyncio.to_thread(market.fetch, minutes)
+                except asyncio.CancelledError:raise
+                except Exception as exc:
+                    log.exception("Market collection failed")
+                    if engine.settings.bar_seconds>=60 and engine.settings.candle_minutes==minutes:engine.fail(str(exc) if isinstance(exc,MarketError) else "시세 수집 오류")
+                    if live.engine.settings.bar_seconds>=60 and live.engine.settings.candle_minutes==minutes:live.fail("공개 시세 수신 오류로 실거래를 정지했습니다.")
+                    if isinstance(exc,MarketError):delay=max(delay,exc.retry_after)
+                    continue
+                processors=[]
+                if engine.settings.bar_seconds>=60 and engine.settings.candle_minutes==minutes:processors.append(process_paper(engine,snapshot))
+                if live.engine.settings.bar_seconds>=60 and live.engine.settings.candle_minutes==minutes:processors.append(process_live(live,snapshot))
+                await asyncio.gather(*processors)
             await asyncio.sleep(delay)
+
+    async def stream(engine, live):
+        def units():
+            return {e.settings.bar_seconds for e in (engine, live.engine) if e.settings.bar_seconds < 60}
+
+        def publish(seconds, snapshot):
+            for target in (engine, live.engine):
+                if target.settings.bar_seconds != seconds:
+                    continue
+                try:
+                    if target is live.engine and target.running and (not live.account_fresh() or live.error):
+                        live.fail("실거래 계좌 동기화가 지연됐습니다.")
+                    target.process_stream(snapshot)
+                except Exception:
+                    log.exception("Second-bar processing failed")
+                    target.fail("초봉 전략 처리 오류로 거래를 정지했습니다.")
+
+        def fail(message):
+            for target in (engine, live.engine):
+                if target.settings.bar_seconds < 60 and target.last_error != message:
+                    target.fail(message)
+        await UpbitSeconds().run(units, publish, fail)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -101,12 +150,18 @@ def create_app(settings=None, market=None, history_market=None, telegram=None, e
             store = Store(settings)
             live = None
             try:
+                if not restore_telegram(store, telegram) and not telegram.enabled:
+                    # Keep process-env credentials until the user saves them in the Web UI.
+                    env_telegram = Telegram.from_env()
+                    if env_telegram.enabled:
+                        telegram.configure(token=env_telegram._token, chat_id=env_telegram._chat_id)
                 store.notifications_recipient = telegram.recipient
                 app.state.engine = Engine(settings, store)
                 live = LiveService(store.settings,exchange)
                 live.store.notifications_recipient=telegram.recipient
                 app.state.live=live
                 task = asyncio.create_task(collect(app.state.engine))
+                stream_task = asyncio.create_task(stream(app.state.engine, live))
                 notification_task = asyncio.create_task(delivery_loop(store,telegram))
                 live_task=asyncio.create_task(live.loop())
                 live_notifications=asyncio.create_task(delivery_loop(live.store,telegram))
@@ -114,9 +169,11 @@ def create_app(settings=None, market=None, history_market=None, telegram=None, e
                     yield
                 finally:
                     task.cancel()
+                    stream_task.cancel()
                     notification_task.cancel()
                     live_task.cancel();live_notifications.cancel()
-                    await asyncio.gather(task,notification_task,live_task,live_notifications,return_exceptions=True)
+                    await asyncio.gather(task,stream_task,notification_task,live_task,live_notifications,return_exceptions=True)
+                    await asyncio.gather(app.state.engine.close_stream(), live.engine.close_stream())
             finally:
                 if live is not None:live.close()
                 store.db.close()
@@ -271,10 +328,22 @@ def create_app(settings=None, market=None, history_market=None, telegram=None, e
     async def notifications():
         return notification_status(app.state.engine.store,telegram)
 
+    @app.post("/api/notifications/settings")
+    async def notification_settings(request: TelegramUpdate):
+        store = app.state.engine.store
+        try:
+            result = save_telegram(store, telegram, enabled=request.enabled,
+                                   bot_token=request.bot_token, chat_id=request.chat_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if app.state.live is not None:
+            app.state.live.store.notifications_recipient = telegram.recipient
+        return result
+
     @app.post("/api/notifications/test")
     async def test_notification():
         if not telegram.enabled:
-            raise HTTPException(status_code=409,detail="서버에 텔레그램 봇 토큰과 채팅 ID를 설정하고 재시작하세요.")
+            raise HTTPException(status_code=409,detail="전략 설정 탭에서 텔레그램 봇 토큰과 채팅 ID를 저장하세요.")
         store = app.state.engine.store
         now = time.time()
         if now-float(store.get("notification_test_last","0"))<10:

@@ -1,3 +1,6 @@
+import asyncio
+import json
+import time
 from datetime import datetime, timedelta
 from dataclasses import replace
 from decimal import Decimal, ROUND_DOWN
@@ -5,8 +8,8 @@ from zoneinfo import ZoneInfo
 
 from .market import UTC
 from .config import EDITABLE_FIELDS, coerce_setting
-from .decision_gate import DecisionGate, build_state, read_log as read_gate_log, write_log as write_gate_log
-from .strategy import moving_average_cross, moving_average_state, allocation_signal
+from .decision_gate import DecisionGate, GateVerdict, build_state, read_log as read_gate_log, write_log as write_gate_log
+from .strategy import moving_average_cross, moving_average_state, allocation_signal, consecutive_state, consecutive_signal
 
 SATOSHI = Decimal("0.00000001")
 
@@ -19,6 +22,11 @@ class Engine:
         self.last_error = None
         self.last_received = None
         self.quote_time = None
+        self.stream_review_task = None
+        self._review_busy = False
+        self.require_gate = True
+        self.exit_fee_rate = None
+        self.market_context = {}
         self.decision_gate = decision_gate if decision_gate is not None else DecisionGate()
 
     def configure(self, changes, now=None):
@@ -33,15 +41,20 @@ class Engine:
                                                               changes["decision_gate_enabled"])
         if not changes or not set(changes) <= set(EDITABLE_FIELDS):
             raise ValueError("변경 가능한 전략 설정을 확인하세요.")
+        if changes.get("strategy", self.settings.strategy) == "consecutive":
+            changes["candle_minutes"] = 1
         settings = replace(self.settings, **changes)
+        unit_changed = settings.bar_seconds != self.settings.bar_seconds
         self.store.save_strategy(settings, (now or datetime.now(UTC)).isoformat())
         self.settings = settings
+        if unit_changed:
+            self.quote_time = None
 
     def equity(self, price):
         return self.store.number("cash") + self.store.number("btc") * price
 
     def fresh(self, now):
-        return self.quote_time is not None and 0 <= (now - self.quote_time).total_seconds() <= self.settings.max_quote_age_seconds
+        return self.quote_time is not None and 0 <= (now - self.quote_time).total_seconds() <= self.settings.quote_max_age
 
     def control(self, action, now=None):
         now = now or datetime.now(UTC)
@@ -76,20 +89,78 @@ class Engine:
             if changed:
                 self.store.notify((now or datetime.now(UTC)).isoformat(), "error", "[BTC 모의매매 · 시세 수집 장애]\n"+message+"\n거래를 정지했습니다.")
 
+    def net_return(self, mark):
+        btc, cost = self.store.number("btc"), self.store.number("cost")
+        if btc <= 0 or cost <= 0:
+            return None
+        price = mark * (1 - self.settings.slippage)
+        bid = self.market_context.get("best_bid")
+        if bid is not None:
+            bid = Decimal(str(bid))
+            if bid.is_finite() and bid > 0:
+                price = min(price, bid)
+        fee = self.exit_fee_rate if self.exit_fee_rate is not None else self.settings.fee_rate
+        return (btc * price * (1 - fee) - cost) / cost
+
     def process(self, snapshot, now=None):
+        now = now or datetime.now(UTC)
+        s = self.settings
+        pending = self._prepare(snapshot, now)
+        if pending is not None:
+            self._commit(pending, s, *self._review(pending, s), now)
+
+    async def process_async(self, snapshot, now=None):
+        now = now or datetime.now(UTC)
+        s = self.settings
+        pending = self._prepare(snapshot, now)
+        if pending is not None:
+            result = await asyncio.to_thread(self._review, pending, s)
+            self._commit(pending, s, *result, now)
+
+    def process_stream(self, snapshot, now=None):
+        """Keep quote/risk processing active while a single gate request is in flight."""
+        now = now or datetime.now(UTC)
+        settings = self.settings
+        pending = self._prepare(snapshot, now)
+        if pending is None:
+            return
+        if pending["action"] == "hold":
+            self._commit(pending, settings, *self._review(pending, settings), now)
+            return
+        self._review_busy = True
+
+        async def review():
+            try:
+                result = await asyncio.to_thread(self._review, pending, settings)
+                self._commit(pending, settings, *result, now)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.fail("초봉 전략 검토 오류로 거래를 정지했습니다.")
+            finally:
+                self._review_busy = False
+        self.stream_review_task = asyncio.create_task(review())
+
+    async def close_stream(self):
+        if self.stream_review_task is not None:
+            self.stream_review_task.cancel()
+            await asyncio.gather(self.stream_review_task, return_exceptions=True)
+
+    def _prepare(self, snapshot, now=None):
         now = now or datetime.now(UTC)
         s, db = self.settings, self.store
         age = (now - snapshot.quote_time).total_seconds()
-        if not snapshot.price.is_finite() or snapshot.price <= 0 or not 0 <= age <= s.max_quote_age_seconds:
+        if not snapshot.price.is_finite() or snapshot.price <= 0 or not 0 <= age <= s.quote_max_age:
             self.fail("시세가 오래되었거나 유효하지 않아 거래를 중지했습니다.", now)
             return
+        self.market_context = getattr(snapshot, "market_context", None) or {}
         self.quote_time = snapshot.quote_time
         self.last_received = now
         recovered = self.last_error is not None
         self.last_error = None
         # Filter again so injected/replayed snapshots cannot introduce unfinished bars.
         candles = sorted((c for c in snapshot.candles
-                          if c.time + timedelta(minutes=s.candle_minutes) <= now), key=lambda c: c.time)
+                          if c.time + timedelta(seconds=s.bar_seconds) <= now), key=lambda c: c.time)
         pending = None
         with db.db:
             if recovered:
@@ -110,7 +181,23 @@ class Engine:
                 db.event(now.isoformat(), "risk", "일일 손실 한도 도달: 신규 매수 중지")
             db.db.execute("INSERT OR REPLACE INTO equity VALUES (?,?,?)",
                           (now.isoformat(), str(equity), str(snapshot.price)))
-            if not self.running or not candles:
+            tracker = None
+            if s.strategy == "consecutive":
+                tracker = consecutive_state(candles, json.loads(db.get("consecutive_tracker", "{}")), s.consecutive_count, s.bar_seconds)
+                db.set("consecutive_tracker", json.dumps(tracker))
+            if not self.running:
+                return
+            net_return = self.net_return(snapshot.price)
+            if s.strategy == "consecutive" and net_return is not None and net_return <= -s.consecutive_stop_loss:
+                key = "stop:" + snapshot.quote_time.isoformat()
+                if db.get("consecutive_stop_quote") != key:
+                    reason = self._execute("sell", snapshot.price, key, now, force=True)
+                    db.set("consecutive_stop_quote", key)
+                    db.event(now.isoformat(), "risk", "순손실 한도 도달: Jev 없이 손절 시도. " + reason)
+                return
+            if self._review_busy:
+                return
+            if not candles:
                 return
             candle = candles[-1]
             candle_id = candle.time.isoformat()
@@ -118,15 +205,19 @@ class Engine:
                 return
             if s.strategy == "ma_cross":
                 action, reason = moving_average_cross(candles, s.short_window, s.long_window, s.candle_minutes)
+            elif s.strategy == "consecutive":
+                action, reason = consecutive_signal(s, tracker, db.number("btc"), net_return)
             else:
                 action, reason = allocation_signal(s, candle, snapshot.price, equity, db.number("btc"))
-            signal_age = (now - candle.time - timedelta(minutes=s.candle_minutes)).total_seconds()
-            if signal_age > 120:
-                action, reason = "hold", "캔들 확정 후 2분이 지나 과거 신호를 건너뜁니다."
-            if action == "hold":
-                db.db.execute("INSERT INTO decisions(time,candle,action,reason) VALUES (?,?,?,?)",
-                              (now.isoformat(), candle_id, action, reason))
-                return
+            signal_age = (now - candle.time - timedelta(seconds=s.bar_seconds)).total_seconds()
+            if signal_age > s.signal_max_age:
+                action, reason = "hold", "캔들 확정 후 {}이 지나 과거 신호를 건너뜁니다.".format(str(s.signal_max_age)+"초" if s.bar_seconds<60 else str(s.signal_max_age//60)+"분")
+            if s.strategy == "consecutive" and action == "buy" and db.get("buy_halted") == "1":
+                action, reason = "hold", "위험 관리: 신규 매수 중지 상태입니다."
+            if s.strategy == "consecutive" and action != "hold":
+                tracker["reviewed"] = True
+                db.set("consecutive_tracker", json.dumps(tracker))
+            # buy/sell/hold all leave the write lock before the gate HTTP call.
             pending = {
                 "candle_id": candle_id,
                 "action": action,
@@ -138,42 +229,88 @@ class Engine:
                 "baseline": baseline,
                 "buy_halted": db.get("buy_halted") == "1",
                 "candles": candles,
+                "cost": db.number("cost"), "market_context": self.market_context,
+                "tracker": tracker, "net_return": net_return, "started": time.monotonic(),
             }
 
-        if pending is None:
-            return
+        return pending
 
+    def _review(self, pending, s):
         state = build_state(pending["action"], pending["reason"], s, pending["mark"], pending["cash"],
                             pending["btc"], pending["equity"], pending["baseline"], pending["candles"],
-                            pending["buy_halted"])
-        verdict = self.decision_gate.evaluate(s, pending["action"], state)
+                            pending["buy_halted"], cost=pending["cost"],
+                            market_context=pending["market_context"], rule_state=pending["tracker"])
+        state["estimated_net_return_pct"] = (str(pending["net_return"] * 100) if pending["net_return"] is not None else None)
+        if s.strategy == "consecutive" and pending["action"] == "hold":
+            return "hold", pending["reason"], GateVerdict(True, skipped=True)
+        if s.strategy == "consecutive" and self.require_gate and not s.decision_gate_enabled:
+            verdict = GateVerdict(False, detail="Jev 게이트를 켜고 API 키를 설정하세요.")
+        else:
+            verdict = self.decision_gate.evaluate(s, pending["action"], state)
         action, reason = pending["action"], pending["reason"]
         if not verdict.skipped:
-            if verdict.proceed and verdict.noul is not None:
+            if pending["action"] == "hold":
+                # Advisory only: log JEV even when the strategy did not fire a trade.
+                if verdict.noul is not None:
+                    reason += " 디시젼 참고 (noul={:.2f}).".format(verdict.noul)
+                else:
+                    reason += " 디시젼 참고 오류 ({}).".format(verdict.detail or "unknown")
+                write_gate_log(s, side="hold", candle=pending["candle_id"], verdict=verdict,
+                               state=state, final_action="hold")
+            elif verdict.proceed and verdict.noul is not None:
                 reason += " 디시젼 게이트 통과 (noul={:.2f}).".format(verdict.noul)
+                write_gate_log(s, side=pending["action"], candle=pending["candle_id"], verdict=verdict,
+                               state=state, final_action=action)
             elif verdict.noul is not None:
                 reason += " 디시젼 게이트 포기 (noul={:.2f}).".format(verdict.noul)
                 action = "hold"
+                write_gate_log(s, side=pending["action"], candle=pending["candle_id"], verdict=verdict,
+                               state=state, final_action=action)
             else:
                 reason += " 디시젼 게이트 오류로 보류 ({}).".format(verdict.detail or "unknown")
                 action = "hold"
-            write_gate_log(s, side=pending["action"], candle=pending["candle_id"], verdict=verdict,
-                           state=state, final_action=action)
+                write_gate_log(s, side=pending["action"], candle=pending["candle_id"], verdict=verdict,
+                               state=state, final_action=action)
 
+        return action, reason, verdict
+
+    def _commit(self, pending, s, action, reason, verdict, now):
+        db = self.store
+        elapsed = max(0, time.monotonic() - pending["started"])
+        if not self.running or self.settings != s or not self.fresh(now + timedelta(seconds=elapsed)):
+            return
+        if s.strategy == "consecutive" and action != "hold":
+            signal_end = datetime.fromisoformat(pending["candle_id"]) + timedelta(seconds=s.bar_seconds)
+            if (now + timedelta(seconds=elapsed) - signal_end).total_seconds() > s.signal_max_age:
+                return
+            if db.number("btc") != pending["btc"] or db.number("cash") != pending["cash"]:
+                return
+            latest = json.loads(db.get("consecutive_tracker", "{}"))
+            if latest.get("last_time") != pending["tracker"].get("last_time"):
+                return
+        if s.strategy == "consecutive" and action == "sell":
+            net = self.net_return(db.number("price"))
+            if net is None or net < s.consecutive_take_profit:
+                action, reason = "hold", "검토 후 비용 반영 익절 조건이 충족되지 않아 보류합니다."
         with db.db:
             if db.db.execute("SELECT 1 FROM decisions WHERE candle=?", (pending["candle_id"],)).fetchone():
                 return
             if action != "hold":
-                reason += " " + self._execute(action, pending["mark"], pending["candle_id"], now)
-            elif not verdict.skipped and not verdict.proceed:
+                reason += " " + self._execute(action, db.number("price") if s.bar_seconds < 60 else pending["mark"], pending["candle_id"], now)
+            elif pending["action"] != "hold" and not verdict.skipped and not verdict.proceed:
                 db.event(now.isoformat(), "decision_gate", reason)
             db.db.execute("INSERT INTO decisions(time,candle,action,reason) VALUES (?,?,?,?)",
                           (now.isoformat(), pending["candle_id"], action, reason))
 
-    def _execute(self, side, mark, identifier, now):
+    def _execute(self, side, mark, identifier, now, force=False):
         # Called inside the decision transaction: fill + balance + deduplication commit together.
         s, db = self.settings, self.store
         cash, btc, cost = db.number("cash"), db.number("btc"), db.number("cost")
+        if s.strategy == "consecutive" and not force:
+            if side == "buy" and btc > 0:
+                return "연속 전략은 보유 중 추가 매수하지 않습니다."
+            if side == "sell" and (self.net_return(mark) is None or self.net_return(mark) < s.consecutive_take_profit):
+                return "비용 차감 후 최소 순익절률에 미달합니다."
         price = mark * (1 + s.slippage if side == "buy" else 1 - s.slippage)
         if side == "buy":
             if db.get("buy_halted") == "1":
@@ -241,6 +378,12 @@ class Engine:
                              "max_exposure": str(s.max_exposure), "daily_loss_limit": str(s.daily_loss_limit),
                              "fee_rate": str(s.fee_rate), "slippage": str(s.slippage),
                              "short_window": s.short_window, "long_window": s.long_window,
+                             "consecutive_seconds": s.consecutive_seconds,
+                             "bar_seconds": s.bar_seconds,
+                             "consecutive_count": s.consecutive_count,
+                             "consecutive_entry_return": str(s.consecutive_entry_return),
+                             "consecutive_take_profit": str(s.consecutive_take_profit),
+                             "consecutive_stop_loss": str(s.consecutive_stop_loss),
                              "strategy":s.strategy, "dca_interval_hours":s.dca_interval_hours,
                              "dca_offset_minutes": s.dca_offset_minutes,
                              "target_exposure":str(s.target_exposure),"rebalance_tolerance":str(s.rebalance_tolerance),
@@ -252,6 +395,9 @@ class Engine:
                              "candle_minutes": s.candle_minutes, "poll_seconds": s.poll_seconds},
                 "fills": db.recent("fills"), "decisions": db.recent("decisions"),
                 "events": db.recent("events", 30), "history": list(reversed(db.recent("equity", 240))),
+                "consecutive": {"state": json.loads(db.get("consecutive_tracker", "{}")),
+                                "net_return_pct": str(self.net_return(price) * 100) if self.net_return(price) is not None else None,
+                                "gate_required": self.require_gate and s.strategy == "consecutive"},
                 "moving_average": self._moving_average_status()}
 
     def _moving_average_status(self):

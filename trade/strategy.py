@@ -1,5 +1,46 @@
 from datetime import timedelta
 from decimal import Decimal
+from datetime import datetime
+
+
+def consecutive_state(candles, previous=None, required=3, seconds=60):
+    """Durable streak; unchanged bars do not reset the once-per-run review flag."""
+    state=dict(previous or {})
+    if state.get("required_count", state.get("window_minutes", 3)) != required or state.get("bar_seconds", 60) != seconds:
+        state = {}
+    state["required_count"] = required
+    state["window_minutes"] = required * seconds / 60
+    state["bar_seconds"] = seconds
+    state["window_seconds"] = required * seconds
+    if not candles:return state
+    last=datetime.fromisoformat(state["last_time"]) if state.get("last_time") else None
+    if last and candles[0].time > last+timedelta(seconds=seconds):
+        state={"required_count": required,"window_minutes": required*seconds/60,"bar_seconds": seconds,"window_seconds": required*seconds};last=None
+    for candle in candles:
+        if last and candle.time <= last:continue
+        before=Decimal(state["last_close"]) if state.get("last_close") else None
+        contiguous=last is not None and candle.time-last==timedelta(seconds=seconds)
+        direction="up" if before is not None and candle.close>before else "down" if before is not None and candle.close<before else "flat"
+        continuing=contiguous and direction!="flat" and state.get("direction")==direction
+        state.update(direction=direction if contiguous else "flat",count=(state.get("count",0)+1 if continuing else 1 if contiguous and direction!="flat" else 0),
+                     reviewed=state.get("reviewed",False) if continuing else False,
+                     last_time=candle.time.isoformat(),last_close=str(candle.close))
+        last=candle.time
+    recent=candles[-(required+1):]
+    ready=len(recent)==required+1 and all(b.time-a.time==timedelta(seconds=seconds) for a,b in zip(recent,recent[1:]))
+    state["ready"]=ready
+    state["window_return"]=str(recent[-1].close/recent[0].close-1) if ready else None
+    return state
+
+
+def consecutive_signal(settings, state, btc, net_return):
+    if not state.get("ready") or state.get("count",0)<settings.consecutive_count:return "hold","연속된 {}초봉 가격 변화 {}회가 필요합니다.".format(settings.bar_seconds, settings.consecutive_count)
+    if state.get("reviewed"):return "hold","현재 연속 구간은 이미 Jev 검토를 요청했습니다."
+    if btc<=0 and state["direction"]=="up" and Decimal(state["window_return"])>=settings.consecutive_entry_return:
+        return "buy","{}초봉 {}회 이상 연속 상승 · 최근 {}초 상승률 기준 충족.".format(settings.bar_seconds,settings.consecutive_count,settings.bar_seconds*settings.consecutive_count)
+    if btc>0 and state["direction"]=="down" and net_return is not None and net_return>=settings.consecutive_take_profit:
+        return "sell","{}초봉 {}회 이상 연속 하락 · 비용 차감 후 최소 순익절률 충족.".format(settings.bar_seconds,settings.consecutive_count)
+    return "hold","방향·상승폭 또는 비용 반영 익절 조건이 충족되지 않았습니다."
 
 
 def allocation_signal(settings, candle, mark, equity, btc):

@@ -12,7 +12,7 @@ from .market import Candle
 
 
 def fingerprint(settings):
-    return json.dumps({k: str(v) for k, v in asdict(settings).items()
+    return json.dumps({k: format(v.normalize(), "f") if isinstance(v, Decimal) else str(v) for k, v in asdict(settings).items()
                        if k not in FINGERPRINT_EXCLUDE}, sort_keys=True)
 
 
@@ -64,6 +64,9 @@ class Store:
                 old_values.setdefault(key,str(getattr(Settings(),key)))
             # Allow upgrading the default candle size (e.g. 60 → 5) without a new DB path.
             old_values["candle_minutes"] = str(settings.candle_minutes)
+            for key, value in asdict(settings).items():
+                if isinstance(value, Decimal) and key in old_values:
+                    old_values[key] = format(Decimal(old_values[key]).normalize(), "f")
             compatible_old = json.dumps(old_values,sort_keys=True)
         if old is not None and compatible_old != current_fingerprint:
             self.db.close()
@@ -88,8 +91,11 @@ class Store:
                   "decision_gate_enabled":"디시젼 게이트", "decision_threshold_buy":"매수 게이트 임계값",
                   "decision_threshold_sell":"매도 게이트 임계값", "decision_timeout_seconds":"게이트 제한시간(초)",
                   "openrouter_api_key":"OpenRouter API 키"}
+        labels.update(consecutive_seconds="연속 봉 단위(초)",candle_minutes="캔들 단위(분)",consecutive_count="연속 횟수",consecutive_entry_return="구간 매수 상승률",
+                      consecutive_take_profit="최소 순익절률",consecutive_stop_loss="순손절률")
         percent_keys = ("max_exposure", "daily_loss_limit", "target_exposure", "rebalance_tolerance",
-                        "decision_threshold_buy", "decision_threshold_sell")
+                        "decision_threshold_buy", "decision_threshold_sell", "consecutive_entry_return",
+                        "consecutive_take_profit", "consecutive_stop_loss")
         def display(key, value):
             if key == "strategy":
                 return STRATEGY_NAMES.get(value, value)
@@ -112,6 +118,9 @@ class Store:
                    for k in EDITABLE_FIELDS if changed(k)]
         # Persist key in overrides for restart; never write the secret into event text.
         with self.db:
+            if settings.bar_seconds != self.settings.bar_seconds:
+                self.db.execute("DELETE FROM candles")
+                self.db.execute("DELETE FROM state WHERE key='consecutive_tracker'")
             self.set("config", fingerprint(settings))
             self.set("strategy_overrides", json.dumps(after, sort_keys=True))
             self.event(timestamp, "settings", "전략 설정 변경: " + (" / ".join(changes) if changes else "변경 없음"))

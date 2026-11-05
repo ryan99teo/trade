@@ -3,12 +3,14 @@ from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 
-STRATEGY_NAMES = {"ma_cross": "이동평균 교차", "dca": "정액 분할매수", "rebalance": "목표 비중 리밸런싱"}
+STRATEGY_NAMES = {"ma_cross": "이동평균 교차", "dca": "정액 분할매수", "rebalance": "목표 비중 리밸런싱",
+                  "consecutive": "봉 연속 전략"}
 NEW_STRATEGY_FIELDS = ("strategy", "dca_interval_hours", "dca_offset_minutes",
-                       "target_exposure", "rebalance_tolerance")
+                       "target_exposure", "rebalance_tolerance", "consecutive_entry_return",
+                       "consecutive_take_profit", "consecutive_stop_loss", "consecutive_count", "consecutive_seconds")
 DECISION_FIELDS = ("decision_gate_enabled", "decision_threshold_buy", "decision_threshold_sell",
                    "decision_timeout_seconds", "openrouter_api_key")
-EDITABLE_FIELDS = (("short_window", "long_window", "order_krw", "max_exposure", "daily_loss_limit")
+EDITABLE_FIELDS = (("short_window", "long_window", "order_krw", "max_exposure", "daily_loss_limit", "candle_minutes")
                    + NEW_STRATEGY_FIELDS + DECISION_FIELDS)
 # Must not invalidate an existing account fingerprint (secrets / gate knobs / poll timing).
 FINGERPRINT_EXCLUDE = ("db_path", "poll_seconds", "max_quote_age_seconds") + DECISION_FIELDS
@@ -51,10 +53,16 @@ class Settings:
     decision_threshold_sell: Decimal = Decimal("0.60")
     decision_timeout_seconds: float = 2.0
     openrouter_api_key: str = ""
+    consecutive_seconds: int = 60
+    consecutive_count: int = 3
+    consecutive_entry_return: Decimal = Decimal("0.005")
+    consecutive_take_profit: Decimal = Decimal("0.03")
+    consecutive_stop_loss: Decimal = Decimal("0.10")
 
     def __post_init__(self):
         for name in ("initial_cash", "order_krw", "max_exposure", "daily_loss_limit", "fee_rate", "slippage",
-                     "target_exposure", "rebalance_tolerance", "decision_threshold_buy", "decision_threshold_sell"):
+                     "target_exposure", "rebalance_tolerance", "decision_threshold_buy", "decision_threshold_sell",
+                     "consecutive_entry_return", "consecutive_take_profit", "consecutive_stop_loss"):
             if not getattr(self, name).is_finite():
                 raise ValueError("금액과 비율에는 유한한 숫자만 사용할 수 있습니다.")
         if not (0 < self.initial_cash and 5000 <= self.order_krw <= self.initial_cash):
@@ -71,6 +79,15 @@ class Settings:
             raise ValueError("수집 주기는 10초 이상이어야 합니다.")
         if self.strategy not in STRATEGY_NAMES:
             raise ValueError("지원하지 않는 전략입니다.")
+        if self.strategy == "consecutive" and self.candle_minutes != 1:
+            raise ValueError("연속 전략은 1분봉으로 설정하세요.")
+        if type(self.consecutive_seconds) is not int or self.consecutive_seconds not in (10,30,60):
+            raise ValueError("연속 전략 봉 단위는 10초·30초·1분 중 선택하세요.")
+        if type(self.consecutive_count) is not int or not 1 <= self.consecutive_count <= 199:
+            raise ValueError("연속 횟수는 1~199 사이의 정수여야 합니다.")
+        if not (0 < self.consecutive_entry_return < 1 and 0 < self.consecutive_take_profit < 1
+                and 0 < self.consecutive_stop_loss < 1):
+            raise ValueError("연속 전략의 매수·익절·손절 기준은 0% 초과 100% 미만이어야 합니다.")
         if self.dca_interval_hours not in (1,4,6,12,24,48,168):
             raise ValueError("분할매수 주기는 1·4·6·12·24·48·168시간 중 선택하세요.")
         if not 0 <= self.dca_offset_minutes < self.dca_interval_hours * 60:
@@ -87,6 +104,18 @@ class Settings:
             raise ValueError("디시젼 게이트 제한 시간은 0 초과 30초 이하여야 합니다.")
         if "\n" in self.openrouter_api_key or "\r" in self.openrouter_api_key:
             raise ValueError("OpenRouter API 키 형식을 확인하세요.")
+
+    @property
+    def bar_seconds(self):
+        return self.consecutive_seconds if self.strategy == "consecutive" else self.candle_minutes * 60
+
+    @property
+    def signal_max_age(self):
+        return self.bar_seconds if self.strategy == "consecutive" else 120
+
+    @property
+    def quote_max_age(self):
+        return min(self.max_quote_age_seconds, self.bar_seconds) if self.bar_seconds < 60 else self.max_quote_age_seconds
 
     @classmethod
     def from_env(cls):

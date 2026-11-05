@@ -15,6 +15,7 @@ UTC = timezone.utc
 class Candle:
     time: datetime
     close: Decimal
+    volume: Decimal = None
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,7 @@ class Snapshot:
     price: Decimal
     quote_time: datetime
     candles: List[Candle]
+    market_context: dict = None
 
 
 class MarketError(Exception):
@@ -69,11 +71,28 @@ class UpbitPublic:
                 if not close.is_finite() or close <= 0:
                     raise ValueError("invalid close")
                 if start + timedelta(minutes=minutes) <= now:
-                    candles.append(Candle(start, close))
+                    volume=Decimal(str(row["candle_acc_trade_volume"])) if "candle_acc_trade_volume" in row else None
+                    candles.append(Candle(start, close, volume))
             price = Decimal(str(ticker["trade_price"]))
             if not price.is_finite() or price <= 0:
                 raise ValueError("invalid price")
+            context={}
+            if minutes == 1:
+                try:
+                    book=self._get("orderbook?markets=KRW-BTC")[0]
+                    units=book["orderbook_units"]
+                    bid=Decimal(str(units[0]["bid_price"]));ask=Decimal(str(units[0]["ask_price"]))
+                    timestamp=datetime.fromtimestamp(int(book["timestamp"])/1000,UTC)
+                    if not 0 <= (datetime.now(UTC)-timestamp).total_seconds() <= 10 or not 0<bid<=ask:
+                        raise ValueError("stale orderbook")
+                    bids=sum(Decimal(str(u["bid_size"])) for u in units[:5])
+                    asks=sum(Decimal(str(u["ask_size"])) for u in units[:5])
+                    context={"best_bid":str(bid),"best_ask":str(ask),"spread_pct":str((ask-bid)/bid*100),
+                             "depth_imbalance_5":str((bids-asks)/(bids+asks)) if bids+asks else None,
+                             "orderbook_time":timestamp.isoformat()}
+                except (MarketError,KeyError,IndexError,TypeError,ValueError,ArithmeticError):
+                    context={"orderbook_unavailable":True}
             return Snapshot(price, datetime.fromtimestamp(int(ticker["timestamp"]) / 1000, UTC),
-                            sorted(candles, key=lambda c: c.time))
+                            sorted(candles, key=lambda c: c.time),context)
         except (KeyError, TypeError, ValueError, IndexError) as exc:
             raise MarketError("업비트 시세 응답 형식을 확인할 수 없습니다.") from exc

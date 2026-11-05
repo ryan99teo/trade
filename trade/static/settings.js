@@ -7,9 +7,10 @@
   function notify(text, error=false) {message.textContent=text;message.classList.toggle('negative',error);}
   function fill() {
     if(!current)return;
-    for(const name of ['strategy','dca_interval_hours','dca_offset_minutes','short_window','long_window','order_krw'])form.elements[name].value=current.settings[name];
-    for(const name of ['max_exposure','daily_loss_limit','target_exposure','rebalance_tolerance'])form.elements[name].value=Number((Number(current.settings[name])*100).toFixed(6));
+    for(const name of ['strategy','consecutive_seconds','consecutive_count','candle_minutes','dca_interval_hours','dca_offset_minutes','short_window','long_window','order_krw'])form.elements[name].value=current.settings[name];
+    for(const name of ['max_exposure','daily_loss_limit','target_exposure','rebalance_tolerance','consecutive_entry_return','consecutive_take_profit','consecutive_stop_loss'])form.elements[name].value=Number((Number(current.settings[name])*100).toFixed(6));
     form.elements.order_krw.max=current.settings.initial_cash;
+    updateStrategyFields(form);
   }
   function controls() {
     fields.disabled=!online||!current||current.running||saving;
@@ -21,7 +22,7 @@
     const initial=!current;current=event.detail;online=true;
     if(!dirty&&!saving)fill();controls();
     if(initial)notify(current.running?'실시간 화면에서 거래를 정지한 뒤 수정하세요.':'설정을 수정하고 저장하세요. 거래는 정지 상태로 유지됩니다.');
-    const cfg=current.settings,pairs=[['초기 가상 자금',won(cfg.initial_cash)],['캔들 단위',cfg.candle_minutes+'분봉'],['수집 주기',cfg.poll_seconds+'초'],['가정 수수료 / 슬리피지',Number(cfg.fee_rate)*100+'% / '+Number(cfg.slippage)*100+'%']];
+    const cfg=current.settings,pairs=[['초기 가상 자금',won(cfg.initial_cash)],['캔들 단위',durationLabel(cfg.bar_seconds??cfg.candle_minutes*60)+'봉'],['수집 주기',cfg.strategy==='consecutive'&&cfg.consecutive_seconds<60?'WebSocket · 실시간':(cfg.strategy==='consecutive'?10:cfg.poll_seconds)+'초'],['가정 수수료 / 슬리피지',Number(cfg.fee_rate)*100+'% / '+Number(cfg.slippage)*100+'%']];
     document.getElementById('strategy-fixed').replaceChildren(...pairs.map(([key,value])=>{const div=document.createElement('div'),dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=key;dd.textContent=value;div.append(dt,dd);return div;}));
     if(typeof renderGateLogs==='function')renderGateLogs('strategy-decision-gate-logs',(current.decision_gate||{}).logs);
   });
@@ -32,8 +33,8 @@
     event.preventDefault();if(saving||!current||current.running||!online)return;
     if(Number(form.elements.short_window.value)>=Number(form.elements.long_window.value)){notify('단기 이동평균은 장기 이동평균보다 작아야 합니다.',true);return;}
     const payload=Object.fromEntries(new FormData(form));
-    for(const name of ['short_window','long_window','dca_interval_hours','dca_offset_minutes'])payload[name]=Number(payload[name]);
-    for(const name of ['max_exposure','daily_loss_limit','target_exposure','rebalance_tolerance'])payload[name]=(Number(payload[name])/100).toFixed(8);
+    for(const name of ['consecutive_seconds','consecutive_count','candle_minutes','short_window','long_window','dca_interval_hours','dca_offset_minutes'])payload[name]=Number(payload[name]);
+    for(const name of ['max_exposure','daily_loss_limit','target_exposure','rebalance_tolerance','consecutive_entry_return','consecutive_take_profit','consecutive_stop_loss'])payload[name]=(Number(payload[name])/100).toFixed(8);
     saving=true;controls();notify('설정을 저장하고 있습니다.');
     try {
       const response=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
@@ -97,25 +98,67 @@
 })();
 
 (() => {
-  const button=document.getElementById('telegram-test'),state=document.getElementById('telegram-state'),message=document.getElementById('telegram-message');
-  let sending=false;
+  const form=document.getElementById('telegram-form');
+  const fields=document.getElementById('telegram-fields');
+  const save=document.getElementById('telegram-save');
+  const reset=document.getElementById('telegram-reset');
+  const button=document.getElementById('telegram-test');
+  const state=document.getElementById('telegram-state');
+  const message=document.getElementById('telegram-message');
+  let current=null,dirty=false,busy=false;
   const names={fill:'모의 체결',risk:'손실 한도',error:'시세 수집 장애',recovery:'시세 수신 복구',test:'테스트 알림'};
   const statuses={pending:'전송 대기',sent:'전송 완료',failed:'전송 실패'};
+  function fill(data){
+    form.elements.enabled.value=String(!!data.enabled);
+    form.elements.bot_token.value='';
+    form.elements.chat_id.value='';
+    const keep=data.keys_set?'저장됨 · 비우면 유지':(data.enabled?'환경변수 사용 중 · 저장 시 DB로 이전':'비우면 기존 값 유지');
+    form.elements.bot_token.placeholder=data.token_set||data.enabled?keep:'비우면 기존 토큰 유지';
+    form.elements.chat_id.placeholder=data.chat_id_set||data.enabled?keep:'비우면 기존 채팅 ID 유지';
+  }
+  function controls(){
+    fields.disabled=busy;
+    save.disabled=busy||!dirty;
+    reset.disabled=busy||!dirty;
+    button.disabled=busy||!current||!current.enabled;
+    state.textContent=!current?'상태 확인 중':current.enabled?(current.keys_set?'사용 중':'사용 중 · 환경변수'):'꺼짐';
+  }
   async function refreshTelegram(){
     try{
       const response=await fetch('/api/notifications');if(!response.ok)throw new Error('알림 상태를 조회할 수 없습니다.');
-      const data=await response.json();state.textContent=data.enabled?'설정됨':'미설정';button.disabled=!data.enabled||sending;
-      document.getElementById('telegram-guide').textContent=data.enabled?'테스트 알림을 보내 실제 수신 여부를 확인하세요. 전송 실패 시 자동으로 재시도합니다.':'서버 환경변수 TRADE_TELEGRAM_BOT_TOKEN과 TRADE_TELEGRAM_CHAT_ID를 설정하고 서버를 재시작하세요. 설정 방법은 README의 텔레그램 알림 항목에 있습니다.';
+      const data=await response.json();current=data;
+      if(!dirty)fill(data);
+      document.getElementById('telegram-guide').textContent=data.enabled?'테스트 알림을 보내 실제 수신 여부를 확인하세요. 전송 실패 시 자동으로 재시도합니다.':'봇 토큰과 채팅 ID를 입력한 뒤 알림을 켜고 저장하세요. BotFather 발급·채팅 ID 확인 방법은 README를 보세요.';
       const pairs=[['전송 대기',data.pending+'건'],['전송 완료',data.sent+'건'],['최종 실패',data.failed+'건']];
       document.getElementById('telegram-counts').replaceChildren(...pairs.map(([key,value])=>{const div=document.createElement('div'),dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=key;dd.textContent=value;div.append(dt,dd);return div;}));
       const list=document.getElementById('telegram-history');
-      if(!data.recent.length){empty(list,'아직 알림 내역이 없습니다.');return;}
-      list.replaceChildren(...data.recent.map(row=>{const p=document.createElement('p');p.textContent=time(row.created_at)+' · '+names[row.kind]+' · '+statuses[row.status]+' · 시도 '+row.attempts+'회'+(row.last_error?' · '+row.last_error:'');return p;}));
-    }catch(error){state.textContent='연결 확인 필요';button.disabled=true;message.textContent=error.message;}
+      if(!data.recent.length)empty(list,'아직 알림 내역이 없습니다.');
+      else list.replaceChildren(...data.recent.map(row=>{const p=document.createElement('p');p.textContent=time(row.created_at)+' · '+names[row.kind]+' · '+statuses[row.status]+' · 시도 '+row.attempts+'회'+(row.last_error?' · '+row.last_error:'');return p;}));
+      controls();
+    }catch(error){current=null;state.textContent='연결 확인 필요';button.disabled=true;message.textContent=error.message;controls();}
   }
+  form.addEventListener('input',()=>{dirty=true;controls();message.textContent='저장하지 않은 변경 사항이 있습니다.';});
+  reset.addEventListener('click',()=>{if(!current)return;dirty=false;fill(current);controls();message.textContent='현재 저장된 설정으로 되돌렸습니다.';});
+  form.addEventListener('submit',async event=>{
+    event.preventDefault();if(busy)return;
+    const payload=Object.fromEntries(new FormData(form));
+    payload.enabled=payload.enabled==='true';
+    if(!payload.bot_token)delete payload.bot_token;
+    if(!payload.chat_id)delete payload.chat_id;
+    busy=true;controls();message.textContent='알림 설정을 저장하고 있습니다.';
+    try{
+      const response=await fetch('/api/notifications/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+      const data=await response.json();
+      if(!response.ok)throw new Error(Array.isArray(data.detail)?data.detail.map(d=>d.msg).join(' / '):data.detail||'알림 설정을 저장하지 못했습니다.');
+      dirty=false;current=data;fill(data);message.textContent='텔레그램 알림 설정을 저장했습니다.';
+    }catch(error){message.textContent=error.message;}
+    finally{busy=false;await refreshTelegram();}
+  });
   button.addEventListener('click',async()=>{
-    if(sending)return;sending=true;button.disabled=true;
-    try{const response=await fetch('/api/notifications/test',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}),data=await response.json();if(!response.ok)throw new Error(data.detail||'요청 실패');message.textContent='테스트 알림 #'+data.id+'을 요청했습니다. 전송 내역과 텔레그램 수신을 확인하세요.';}catch(error){message.textContent=error.message;}finally{sending=false;await refreshTelegram();}
+    if(busy||!current?.enabled)return;busy=true;controls();
+    try{const response=await fetch('/api/notifications/test',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}),data=await response.json();if(!response.ok)throw new Error(data.detail||'요청 실패');message.textContent='테스트 알림 #'+data.id+'을 요청했습니다. 전송 내역과 텔레그램 수신을 확인하세요.';}catch(error){message.textContent=error.message;}finally{busy=false;await refreshTelegram();}
   });
   refreshTelegram();setInterval(refreshTelegram,5000);
 })();
+
+(() => {const form=document.getElementById('strategy-form');form.elements.strategy.addEventListener('change',()=>{updateStrategyFields(form);});})();

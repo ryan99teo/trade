@@ -66,7 +66,7 @@ def ensure_environment():
     if not PYTHON.exists():
         print("첫 실행: Python 가상환경을 준비합니다.", flush=True)
         subprocess.run([sys.executable, "-m", "venv", str(ROOT / ".venv")], check=True)
-    check = subprocess.run([str(PYTHON), "-c", "import fastapi, uvicorn"],
+    check = subprocess.run([str(PYTHON), "-c", "import fastapi, uvicorn; from websockets.asyncio.client import connect"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if check.returncode:
         print("첫 실행: 필요한 패키지를 설치합니다.", flush=True)

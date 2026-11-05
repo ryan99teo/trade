@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_CEILING, ROUND_DOWN
 import hashlib
 import json
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 import uuid
 
@@ -26,12 +28,16 @@ def amount(value):
 
 
 class IntentEngine(Engine):
-    def _execute(self, side, mark, identifier, now):
-        if self.store.db.execute("SELECT 1 FROM live_orders WHERE state IN ('prepared','submitting','unknown','wait','watch','cancel_pending')").fetchone():
+    def _execute(self, side, mark, identifier, now, force=False):
+        pending=self.store.db.execute("SELECT * FROM live_orders WHERE state IN ('prepared','submitting','unknown','wait','watch','cancel_pending')").fetchone()
+        if pending:
+            if force and pending["side"]=="sell" and pending["state"]=="prepared":
+                self.store.db.execute("UPDATE live_orders SET purpose='stop_loss' WHERE identifier=?",(pending["identifier"],))
+                return "미전송 매도 주문을 손절로 전환했습니다."
             return "미해결 실거래 주문이 있어 새 주문을 보류합니다."
         if side=="buy" and self.store.get("buy_halted")=="1":return "신규 매수가 중지되어 있습니다."
-        self.store.db.execute("INSERT INTO live_orders(identifier,candle,side,created_at,state,mark) VALUES (?,?,?,?,?,?)",
-                              ("btc-"+uuid.uuid4().hex,identifier,side,now.isoformat(),"prepared",str(mark)))
+        self.store.db.execute("INSERT INTO live_orders(identifier,candle,side,created_at,state,mark,purpose) VALUES (?,?,?,?,?,?,?)",
+                              ("btc-"+uuid.uuid4().hex,identifier,side,now.isoformat(),"prepared",str(mark),"stop_loss" if force else "strategy"))
         return "실거래 주문 의도를 저장했습니다. 거래소 검증 후 접수합니다."
 
 
@@ -45,11 +51,20 @@ class LiveService:
         self.order_cap=amount(order_cap if order_cap is not None else self.DEFAULT_ORDER_CAP)
         if not 5000<=self.order_cap<=self.budget:raise ValueError("실거래 예산·주문 한도는 5,000원 이상이며 주문 한도는 예산 이하여야 합니다.")
         settings=replace(paper_settings,db_path=paper_settings.db_path.with_name(paper_settings.db_path.stem+"-live.sqlite3"),
-                         initial_cash=self.budget,order_krw=min(paper_settings.order_krw,self.order_cap))
+                         initial_cash=self.budget,consecutive_seconds=60,order_krw=min(paper_settings.order_krw,self.order_cap))
         settings.db_path.parent.mkdir(parents=True,exist_ok=True)
         self._process_lock=open(str(settings.db_path)+".lock","a")
         try:
             fcntl.flock(self._process_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            # Legacy live overrides predate the editable timeframe. Keep the live ledger's unit.
+            if settings.db_path.exists():
+                with closing(sqlite3.connect(str(settings.db_path))) as saved:
+                    rows=dict(saved.execute("SELECT key,value FROM state WHERE key IN ('config','strategy_overrides')"))
+                overrides=json.loads(rows.get("strategy_overrides", "{}"))
+                config=json.loads(rows.get("config", "{}"))
+                if "candle_minutes" not in overrides and "candle_minutes" in config:
+                    settings=replace(settings,candle_minutes=int(config["candle_minutes"]),
+                                     strategy=overrides.get("strategy",config.get("strategy",settings.strategy)))
             self.store=Store(settings)
         except Exception:
             self._process_lock.close()
@@ -62,6 +77,9 @@ class LiveService:
           quantity TEXT NOT NULL DEFAULT '0',funds TEXT NOT NULL DEFAULT '0',fee TEXT NOT NULL DEFAULT '0',
           last_error TEXT);
         """)
+        if "purpose" not in {r["name"] for r in self.store.db.execute("PRAGMA table_info(live_orders)")}:
+            self.store.db.execute("ALTER TABLE live_orders ADD COLUMN purpose TEXT NOT NULL DEFAULT 'strategy'")
+            self.store.db.commit()
         # Snapshot strategy selection separately; later paper edits do not change live settings.
         if self.store.get("strategy_overrides") is None:
             with self.store.db:
@@ -155,6 +173,10 @@ class LiveService:
         if self.engine.running and (not self.account_fresh() or self.error):self.fail("실거래 계좌 동기화가 지연됐습니다.")
         self.engine.process(snapshot)
 
+    async def on_snapshot_async(self, snapshot):
+        if self.engine.running and (not self.account_fresh() or self.error):self.fail("실거래 계좌 동기화가 지연됐습니다.")
+        await self.engine.process_async(snapshot)
+
     async def connect(self):
         if not self.client.configured:raise ValueError("업비트 API 키 설정이 필요합니다.")
         if not self.binding_ok:raise ValueError("기존 실거래 기록과 API 키가 다릅니다. 기존 계좌 확인이 필요합니다.")
@@ -178,11 +200,12 @@ class LiveService:
         except (KeyError,TypeError,StopIteration,ArithmeticError) as exc:
             raise ValueError("계좌·수수료·호가 응답을 검증할 수 없습니다.") from exc
         self.chance,self.tick=chance,tick
+        self.engine.exit_fee_rate=amount(chance["ask_fee"])
         self.connected_at=datetime.now(UTC)
         if not any(r["state"] in ("submitting","unknown") for r in self.active()):self.error=None
         with self.store.db:self.store.set("exchange_binding",self.client.binding)
 
-    def plan(self, side, mark, identifier):
+    def plan(self, side, mark, identifier, force=False):
         if self.chance is None or self.tick is None:raise ValueError("계좌 연결을 먼저 확인하세요.")
         fee=amount(self.chance["bid_fee" if side=="buy" else "ask_fee"])
         settings=replace(self.engine.settings,db_path=Path(":memory:"),fee_rate=fee,
@@ -191,7 +214,7 @@ class LiveService:
         try:
             with shadow.db:
                 for key in ("cash","btc","cost","realized","buy_halted"):shadow.set(key,self.store.get(key,"0"))
-                reason=Engine(settings,shadow)._execute(side,mark,identifier,datetime.now(UTC))
+                reason=Engine(settings,shadow)._execute(side,mark,identifier,datetime.now(UTC),force=force)
             fills=shadow.recent("fills")
             if not fills:raise ValueError(reason)
             fill=fills[0]
@@ -307,11 +330,11 @@ class LiveService:
         for row in self.active():
             if row["state"]!="prepared" or not self.engine.running:continue
             now=datetime.now(UTC)
-            candle=datetime.fromisoformat(row["candle"])
-            if not self.engine.fresh(now) or (now-candle-timedelta(minutes=self.engine.settings.candle_minutes)).total_seconds()>120:
+            candle=datetime.fromisoformat(row["candle"].removeprefix("stop:"))
+            if not self.engine.fresh(now) or (now-candle-timedelta(seconds=self.engine.settings.bar_seconds)).total_seconds()>self.engine.settings.signal_max_age:
                 with self.store.db:self.store.db.execute("UPDATE live_orders SET state='aborted',last_error='신호 유효시간 경과' WHERE identifier=?",(row["identifier"],))
                 continue
-            try:params=self.plan(row["side"],self.store.number("price"),row["identifier"])
+            try:params=self.plan(row["side"],self.store.number("price"),row["identifier"],force=row["purpose"]=="stop_loss")
             except ValueError as exc:
                 with self.store.db:self.store.db.execute("UPDATE live_orders SET state='rejected',last_error=? WHERE identifier=?",(str(exc),row["identifier"]))
                 continue
@@ -350,7 +373,7 @@ class LiveService:
                       available_btc=str(self.chance["ask_account"]["balance"]) if self.chance else None,
                       bid_fee=str(self.chance["bid_fee"]) if self.chance else None,
                       ask_fee=str(self.chance["ask_fee"]) if self.chance else None,
-                      orders=[dict(r) for r in self.store.db.execute("SELECT identifier,side,created_at,state,uuid,quantity,funds,fee,last_error FROM live_orders ORDER BY created_at DESC LIMIT 100")])
+                      orders=[dict(r) for r in self.store.db.execute("SELECT identifier,side,created_at,state,uuid,quantity,funds,fee,last_error,purpose FROM live_orders ORDER BY created_at DESC LIMIT 100")])
         return result
 
     async def loop(self):

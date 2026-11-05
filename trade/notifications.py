@@ -20,15 +20,27 @@ class DeliveryError(Exception):
 
 class Telegram:
     def __init__(self, token="", chat_id=""):
-        self._token = token.strip()
-        self._chat_id = chat_id.strip()
-        self.enabled = bool(self._token and self._chat_id)
-        self.recipient = hashlib.sha256((self._token+"\n"+self._chat_id).encode()).hexdigest() if self.enabled else None
-        self.missing = [label for value,label in ((self._token,"봇 토큰"),(self._chat_id,"채팅 ID")) if not value]
+        self._token = ""
+        self._chat_id = ""
+        self.enabled = False
+        self.recipient = None
+        self.missing = ["봇 토큰", "채팅 ID"]
+        self.configure(token=token, chat_id=chat_id)
 
     @classmethod
     def from_env(cls):
         return cls(os.getenv("TRADE_TELEGRAM_BOT_TOKEN",""), os.getenv("TRADE_TELEGRAM_CHAT_ID",""))
+
+    def configure(self, token=None, chat_id=None):
+        if token is not None:
+            self._token = str(token).strip()
+        if chat_id is not None:
+            self._chat_id = str(chat_id).strip()
+        self.enabled = bool(self._token and self._chat_id)
+        self.recipient = (hashlib.sha256((self._token + "\n" + self._chat_id).encode()).hexdigest()
+                          if self.enabled else None)
+        self.missing = [label for value, label in ((self._token, "봇 토큰"), (self._chat_id, "채팅 ID")) if not value]
+        return self
 
     def send(self, text):
         if not self.enabled:
@@ -59,14 +71,60 @@ class Telegram:
         return result["message_id"]
 
 
+def restore(store, telegram):
+    """Apply UI-saved credentials from the paper ledger. Returns True when DB had values."""
+    token = store.get("telegram_bot_token")
+    chat_id = store.get("telegram_chat_id")
+    if token is None and chat_id is None:
+        return False
+    telegram.configure(token=token or "", chat_id=chat_id or "")
+    return True
+
+
+def save(store, telegram, *, enabled, bot_token=None, chat_id=None, timestamp=None):
+    """Persist Telegram credentials in the paper DB. Blank inputs keep the previous secret."""
+    timestamp = timestamp or datetime.now(UTC).isoformat()
+    if not enabled:
+        with store.db:
+            store.set("telegram_bot_token", "")
+            store.set("telegram_chat_id", "")
+            store.event(timestamp, "telegram", "텔레그램 알림 설정 변경: 끔")
+        telegram.configure(token="", chat_id="")
+        store.notifications_recipient = None
+        return status(store, telegram)
+    token = (bot_token if bot_token is not None and str(bot_token).strip()
+             else store.get("telegram_bot_token", "") or "")
+    chat = (chat_id if chat_id is not None and str(chat_id).strip()
+            else store.get("telegram_chat_id", "") or "")
+    token, chat = str(token).strip(), str(chat).strip()
+    if not token or not chat:
+        raise ValueError("텔레그램을 켜려면 봇 토큰과 채팅 ID가 필요합니다.")
+    with store.db:
+        store.set("telegram_bot_token", token)
+        store.set("telegram_chat_id", chat)
+        store.event(timestamp, "telegram", "텔레그램 알림 설정 변경: 켬 · 자격 증명 저장됨")
+    telegram.configure(token=token, chat_id=chat)
+    store.notifications_recipient = telegram.recipient
+    return status(store, telegram)
+
+
 def status(store, telegram):
-    rows = [dict(row) for row in store.db.execute(
-        "SELECT id,kind,created_at,status,attempts,last_error,sent_at FROM notifications WHERE recipient=? ORDER BY id DESC LIMIT 10",
-        (telegram.recipient,))]
-    counts = {row["status"]:row["n"] for row in store.db.execute(
-        "SELECT status,COUNT(*) AS n FROM notifications WHERE recipient=? GROUP BY status", (telegram.recipient,))}
-    return {"enabled":telegram.enabled, "missing":telegram.missing, "recent":rows,
-            "pending":counts.get("pending",0),"failed":counts.get("failed",0),"sent":counts.get("sent",0)}
+    recipient = telegram.recipient
+    rows = []
+    counts = {}
+    if recipient:
+        rows = [dict(row) for row in store.db.execute(
+            "SELECT id,kind,created_at,status,attempts,last_error,sent_at FROM notifications WHERE recipient=? ORDER BY id DESC LIMIT 10",
+            (recipient,))]
+        counts = {row["status"]: row["n"] for row in store.db.execute(
+            "SELECT status,COUNT(*) AS n FROM notifications WHERE recipient=? GROUP BY status", (recipient,))}
+    token_set = bool((store.get("telegram_bot_token") or "").strip())
+    chat_set = bool((store.get("telegram_chat_id") or "").strip())
+    return {"enabled": telegram.enabled, "missing": telegram.missing, "recent": rows,
+            "token_set": token_set, "chat_id_set": chat_set,
+            "keys_set": token_set and chat_set,
+            "pending": counts.get("pending", 0), "failed": counts.get("failed", 0),
+            "sent": counts.get("sent", 0)}
 
 
 async def deliver_one(store, telegram, now=None):

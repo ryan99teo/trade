@@ -22,7 +22,7 @@
     <article><p>가상 원화 잔고</p><h2 id="cash">—</h2><small id="btc">BTC —</small></article>
     <article><p>비트코인 현재가</p><h2 id="price">—</h2><small id="daily">당일 손익 —</small></article>
   </section>
-  <section class="panel">
+  <section class="panel" id="paper-ma-panel">
     <div class="panel-head"><h3>이동평균 상태</h3><span id="ma-ready" class="run-chip is-unknown">확인 중</span></div>
     <div class="metrics ma-metrics">
       <article><p>단기 MA</p><h2 id="ma-short">—</h2><small id="ma-short-meta">—</small></article>
@@ -32,20 +32,21 @@
     </div>
     <p id="ma-note" class="muted">시세 수집 후 이동평균 준비 상태를 표시합니다.</p>
   </section>
+<section class="panel" id="paper-consecutive-panel" hidden><h3>봉 연속 전략 · 비용 반영</h3><dl id="paper-consecutive-state"></dl><p class="muted">설정한 연속 횟수와 비용 반영 순손익률로 매수·익절을 검토합니다. 손절은 Jev 없이 시도하며 보유 중 추가 매수하지 않습니다.</p><p id="paper-consecutive-gate" class="muted"></p></section>
   <div class="columns"><section class="panel"><div class="panel-head"><h3>자산 흐름</h3><span>최근 240회 관측</span></div><canvas id="chart" aria-label="가상 자산 평가액 추이" role="img"></canvas><p class="muted">관측 시점의 평가액입니다. 매매 성과 검증을 위한 백테스트 결과가 아닙니다.</p></section>
   <section class="panel"><h3>운영 규칙</h3><dl id="settings"></dl><p class="muted">손실 한도 도달 시 신규 매수를 중지합니다. 매도 신호는 계속 처리하며, 재시작 후에는 거래 정지 상태로 열립니다.</p></section></div>
   <section class="panel"><div class="panel-head"><h3>모의 체결</h3><span>최근 100건</span></div><div class="scroll"><table><thead><tr><th>시각 (한국)</th><th>방향</th><th>체결가</th><th>BTC 수량</th><th>수수료</th><th>실현 손익</th></tr></thead><tbody id="fills"></tbody></table></div></section>
-  <section class="panel"><h3>전략 판단</h3><p class="muted">확정 캔들마다 한 번 판단합니다. 확정 후 2분이 지난 신호는 건너뜁니다.</p><div id="decisions" class="log"></div></section>
-  <section class="panel"><div class="panel-head"><h3>디시젼 게이트 로그</h3><span>최근 50건 · JSON</span></div><p class="muted">매수·매도 신호에서 게이트가 호출된 기록입니다. API 키는 포함되지 않습니다.</p><div id="decision-gate-logs" class="log json-log"></div></section>
+  <section class="panel"><h3>전략 판단</h3><p class="muted">확정 캔들마다 한 번 판단합니다. 연속 전략은 봉 확정 후 선택한 봉 길이만큼 지난 신호를 건너뛰고, 손절은 시세 수신마다 별도로 검사합니다.</p><div id="decisions" class="log"></div></section>
+  <section class="panel"><div class="panel-head"><h3>디시젼 게이트 로그</h3><span>최근 50건 · JSON</span></div><p class="muted">매수·매도 게이트와 hold 참고(JEV) 호출 기록입니다. hold는 체결하지 않으며 API 키는 포함되지 않습니다.</p><div id="decision-gate-logs" class="log json-log"></div></section>
   <section class="panel"><h3>운영 기록</h3><div id="events" class="log"></div></section>
   </section>
   <section id="backtest-view" hidden>
     <section class="panel">
-      <div class="panel-head"><h3>과거 데이터로 전략 검증</h3><span>KRW-BTC · 확정 1시간봉</span></div>
-      <p class="muted">한국시간 기준 최대 365일, 어제까지 선택할 수 있습니다. 준비 구간을 추가 수집하고 다음 봉 시가에 가상 체결합니다.</p>
+      <div class="panel-head"><h3>과거 데이터로 전략 검증</h3><span>KRW-BTC · 전략별 캔들</span></div>
+      <p class="muted">한국시간 어제까지 선택할 수 있습니다. 연속 전략은 10초·30초봉 최대 1일(최근 3개월), 1분봉 최대 7일이며 나머지는 1시간봉·최대 365일입니다. 준비 구간을 추가 수집하고 다음 봉 시가에 가상 체결합니다.</p>
       <form id="bt-form">
         <div class="bt-fields">
-          <label>전략<select name="strategy"><option value="ma_cross">이동평균 교차</option><option value="dca">정액 분할매수</option><option value="rebalance">목표 비중 리밸런싱</option></select></label>
+          <label>전략<select name="strategy"><option value="ma_cross">이동평균 교차</option><option value="dca">정액 분할매수</option><option value="rebalance">목표 비중 리밸런싱</option><option value="consecutive">봉 연속 전략</option></select></label>
           <label>시작일<input name="start_date" id="bt-start" type="date" required></label>
           <label>종료일 (포함)<input name="end_date" id="bt-end" type="date" required></label>
           <label>초기 자금 (원)<input name="initial_cash" type="number" min="5000" max="100000000000" step="1" value="1000000" required></label>
@@ -60,9 +61,14 @@
           <label>분할매수 시작 분<input name="dca_offset_minutes" type="number" min="0" max="10079" step="1" value="0" required title="UTC 주기 경계 이후 분. 예: 24시간+35 → 한국시간 09:35. 1시간봉이면 해당 시각 포함 봉 확정 후 매수"></label>
           <label>리밸런싱 목표 BTC 비중 (%)<input name="target_exposure" type="number" min="0.01" max="100" step="0.01" value="20" required></label>
           <label>리밸런싱 허용 편차 (%p)<input name="rebalance_tolerance" type="number" min="0.01" max="99.99" step="0.01" value="2" required></label>
+            <label>봉 단위<select name="consecutive_seconds"><option value="10">10초봉</option><option value="30">30초봉</option><option value="60" selected>1분봉</option></select></label>
+            <label>연속 횟수 (회)<input name="consecutive_count" type="number" min="1" max="199" step="1" value="3" required></label>
+            <label>연속 구간 매수 상승률 (%)<input name="consecutive_entry_return" type="number" min="0.01" max="99.99" step="0.01" value="0.5" required></label>
+            <label>연속 전략 · 최소 순익절률 (%)<input name="consecutive_take_profit" type="number" min="0.01" max="99.99" step="0.01" value="3" required></label>
+            <label>연속 전략 · 순손절률 (%)<input name="consecutive_stop_loss" type="number" min="0.01" max="99.99" step="0.01" value="10" required></label>
         </div>
         <div class="bt-actions"><button id="bt-run" type="submit" class="primary" value="single">백테스트 실행</button><button id="bt-compare" type="submit" value="compare">세 전략 비교</button><p id="bt-message" role="status">모의계좌 잔고와 실행 상태에 영향을 주지 않습니다.</p></div>
-        <p class="muted">이동평균 기간은 교차 전략에, 주기는 분할매수에, 목표 비중·편차는 리밸런싱에 적용됩니다. 세 전략 비교는 나머지 조건과 캔들을 동일하게 사용합니다.</p>
+        <p class="muted">연속 전략은 해당 전략의 옵션만 표시합니다. 기존 세 전략 비교에서는 이동평균·분할매수·리밸런싱 설정을 함께 사용합니다.</p>
       </form>
     </section>
     <section class="panel"><div class="bt-history"><label for="bt-history">저장된 결과</label><select id="bt-history"><option value="">실행 결과를 선택하세요</option></select><a id="bt-csv" hidden>거래 내역 CSV 다운로드</a></div></section>
@@ -85,11 +91,12 @@
   <section id="strategy-view" hidden>
     <section class="panel">
       <div class="panel-head"><h3>실시간 모의매매 전략 설정</h3><span id="strategy-state">상태 확인 중</span></div>
-      <p class="muted">전략과 자금 한도를 변경합니다. 이동평균 기간은 교차 전략에, 매수 주기는 분할매수에, 목표 비중·편차는 리밸런싱에 적용됩니다. 거래를 정지한 뒤 저장할 수 있으며 저장 후 자동으로 시작되지 않습니다.</p>
+      <p class="muted">전략과 자금 한도를 변경합니다. 연속 전략을 선택하면 해당 전략에 사용하는 설정만 표시합니다. 거래를 정지한 뒤 저장할 수 있으며 저장 후 자동으로 시작되지 않습니다.</p>
       <form id="strategy-form">
         <fieldset id="strategy-fields" disabled>
           <div class="bt-fields">
-            <label>실행 전략<select name="strategy"><option value="ma_cross">이동평균 교차</option><option value="dca">정액 분할매수</option><option value="rebalance">목표 비중 리밸런싱</option></select></label>
+            <label>실행 전략<select name="strategy"><option value="ma_cross">이동평균 교차</option><option value="dca">정액 분할매수</option><option value="rebalance">목표 비중 리밸런싱</option><option value="consecutive">봉 연속 전략</option></select></label>
+            <label>캔들 단위<select name="candle_minutes"><option value="1">1분</option><option value="3">3분</option><option value="5">5분</option><option value="10">10분</option><option value="15">15분</option><option value="30">30분</option><option value="60">60분</option><option value="240">240분</option></select></label>
             <label>단기 이동평균 (봉)<input name="short_window" type="number" min="1" max="198" step="1" required></label>
             <label>장기 이동평균 (봉)<input name="long_window" type="number" min="2" max="199" step="1" required></label>
             <label>1회 주문 금액 (원)<input name="order_krw" type="number" min="5000" step="1" required></label>
@@ -99,6 +106,11 @@
             <label>분할매수 시작 분<input name="dca_offset_minutes" type="number" min="0" max="10079" step="1" required title="UTC 주기 경계 이후 분. 예: 24시간+35 → 한국시간 09:35. 1시간봉이면 해당 시각 포함 봉 확정 후 매수"></label>
             <label>리밸런싱 목표 BTC 비중 (%)<input name="target_exposure" type="number" min="0.01" max="100" step="0.01" required></label>
             <label>리밸런싱 허용 편차 (%p)<input name="rebalance_tolerance" type="number" min="0.01" max="99.99" step="0.01" required></label>
+            <label>봉 단위<select name="consecutive_seconds"><option value="10">10초봉</option><option value="30">30초봉</option><option value="60" selected>1분봉</option></select></label>
+            <label>연속 횟수 (회)<input name="consecutive_count" type="number" min="1" max="199" step="1" value="3" required></label>
+            <label>연속 구간 매수 상승률 (%)<input name="consecutive_entry_return" type="number" min="0.01" max="99.99" step="0.01" value="0.5" required></label>
+            <label>연속 전략 · 최소 순익절률 (%)<input name="consecutive_take_profit" type="number" min="0.01" max="99.99" step="0.01" value="3" required></label>
+            <label>연속 전략 · 순손절률 (%)<input name="consecutive_stop_loss" type="number" min="0.01" max="99.99" step="0.01" value="10" required></label>
           </div>
         </fieldset>
         <div class="bt-actions"><button id="strategy-save" type="submit" class="primary" disabled>설정 저장</button><button id="strategy-reset" type="button">수정 취소</button><p id="strategy-message" role="status">현재 설정을 불러오고 있습니다.</p></div>
@@ -120,13 +132,22 @@
         <div class="bt-actions"><button id="decision-gate-save" type="submit" class="primary" disabled>게이트 설정 저장</button><button id="decision-gate-reset" type="button">수정 취소</button><p id="decision-gate-message" role="status">현재 설정을 불러오고 있습니다.</p></div>
       </form>
       <div class="panel-head" style="margin-top:20px"><h3>게이트 JSON 로그</h3><span>모의매매 · 최근 50건</span></div>
-      <p class="muted">파일 로그와 동일합니다. 매수·매도 신호가 게이트를 통과할 때만 쌓입니다.</p>
+      <p class="muted">파일 로그와 동일합니다. 매수·매도 게이트와 hold 참고 호출이 쌓입니다.</p>
       <div id="strategy-decision-gate-logs" class="log json-log"></div>
     </section>
     <section class="panel"><div class="panel-head"><h3>텔레그램 알림</h3><span id="telegram-state">상태 확인 중</span></div>
-      <p class="muted">모의 체결 · 손실 한도 도달 · 시세 수집 장애 및 복구를 알립니다.</p>
+      <p class="muted">모의 체결 · 손실 한도 도달 · 시세 수집 장애 및 복구를 알립니다. 봇 토큰·채팅 ID는 모의 DB에만 저장하며 상태 API에 다시 표시하지 않습니다.</p>
+      <form id="telegram-form">
+        <fieldset id="telegram-fields">
+          <div class="bt-fields">
+            <label>텔레그램 알림<select name="enabled"><option value="false">끄기</option><option value="true">켜기</option></select></label>
+            <label>봇 토큰<input name="bot_token" type="password" autocomplete="off" placeholder="비우면 기존 토큰 유지" maxlength="256"></label>
+            <label>채팅 ID<input name="chat_id" type="password" autocomplete="off" placeholder="비우면 기존 채팅 ID 유지" maxlength="64"></label>
+          </div>
+        </fieldset>
+        <div class="bt-actions"><button id="telegram-save" type="submit" class="primary" disabled>알림 설정 저장</button><button id="telegram-reset" type="button">수정 취소</button><button id="telegram-test" type="button" disabled>테스트 알림 보내기</button><p id="telegram-message" role="status"></p></div>
+      </form>
       <p id="telegram-guide" class="muted">연결 설정을 확인하고 있습니다.</p>
-      <div class="bt-actions"><button id="telegram-test" type="button" disabled>테스트 알림 보내기</button><p id="telegram-message" role="status"></p></div>
       <dl id="telegram-counts"></dl><div id="telegram-history" class="log"></div>
     </section>
     <section class="panel"><h3>설정 적용 기준</h3><dl id="strategy-fixed"></dl><ul class="muted">
@@ -165,7 +186,7 @@
       <p class="muted">정지는 새 주문을 막습니다. 이미 접수한 주문은 체결될 수 있으므로 아래 주문 내역에서 취소·최종 상태를 확인하세요.</p>
     </section>
     <section class="metrics"><article><p>실거래 운영 예산</p><h2 id="real-budget">—</h2><small id="real-cap">1회 매수 상한 —</small></article><article><p>운영 장부 원화</p><h2 id="real-cash">—</h2><small>실제 체결 금액·수수료 반영</small></article><article><p>봇이 관리하는 BTC</p><h2 id="real-btc">—</h2><small>기존 보유 BTC는 제외</small></article><article><p>실거래 총 손익</p><h2 id="real-pnl">—</h2><small id="real-available">계좌 조회 전</small></article></section>
-    <section class="panel">
+    <section class="panel" id="real-ma-panel">
       <div class="panel-head"><h3>실거래 이동평균 상태</h3><span id="real-ma-ready" class="run-chip is-unknown">확인 중</span></div>
       <div class="metrics ma-metrics">
         <article><p>단기 MA</p><h2 id="real-ma-short">—</h2><small id="real-ma-short-meta">—</small></article>
@@ -175,6 +196,7 @@
       </div>
       <p id="real-ma-note" class="muted">시세 수집 후 이동평균 준비 상태를 표시합니다.</p>
     </section>
+<section class="panel" id="real-consecutive-panel" hidden><h3>봉 연속 전략 · 비용 반영</h3><dl id="real-consecutive-state"></dl><p class="muted">설정한 연속 횟수와 비용 반영 순손익률로 매수·익절을 검토합니다. 손절은 Jev 없이 시도하며 보유 중 추가 매수하지 않습니다.</p><p id="real-consecutive-gate" class="muted"></p></section>
     <section class="panel bt-chart-panel"><h3>실거래 전략 설정</h3><p class="muted">모의매매 설정과 별도로 저장합니다. 실거래 정지 및 미해결 주문이 없는 상태에서 변경할 수 있습니다.</p><form id="real-settings"><fieldset id="real-fields" disabled></fieldset><div class="bt-actions"><button id="real-save" type="submit" disabled>실거래 설정 저장</button><p id="real-settings-message" class="muted" role="status"></p></div></form></section>
     <section class="panel">
       <div class="panel-head"><h3>실거래 디시젼 게이트</h3><span id="real-decision-gate-state">상태 확인 중</span></div>

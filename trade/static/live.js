@@ -72,7 +72,8 @@
     get('real-cash').textContent=won(data.cash);get('real-btc').textContent=Number(data.btc).toFixed(8);get('real-pnl').textContent=won(data.total_pnl);color(get('real-pnl'),data.total_pnl);
     get('real-available').textContent=data.available_krw===null?'계좌 조회 전':'업비트 사용 가능 원화 '+won(data.available_krw);
     get('real-buy-toggle').textContent=data.buy_halted?'신규 매수 재개':'신규 매수 중지';
-    if(!dirty){for(const name of ['strategy','dca_interval_hours','dca_offset_minutes','short_window','long_window','order_krw'])form.elements[name].value=data.settings[name];for(const name of ['max_exposure','daily_loss_limit','target_exposure','rebalance_tolerance'])form.elements[name].value=Number(data.settings[name])*100;}
+    if(!dirty){for(const name of ['strategy','consecutive_seconds','consecutive_count','candle_minutes','dca_interval_hours','dca_offset_minutes','short_window','long_window','order_krw'])form.elements[name].value=data.settings[name];for(const name of ['max_exposure','daily_loss_limit','target_exposure','rebalance_tolerance','consecutive_entry_return','consecutive_take_profit','consecutive_stop_loss'])form.elements[name].value=Number(data.settings[name])*100;}
+    updateStrategyFields(form);
     if(!gateDirty)fillGate(data);
     if(!exchangeDirty)fillExchange(data);
     form.elements.order_krw.max=data.order_cap;
@@ -82,7 +83,7 @@
     }));
     if(!data.orders.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=7;td.className='empty';td.textContent='실제 주문 내역이 없습니다.';tr.append(td);get('real-orders').append(tr);}
     if(typeof renderGateLogs==='function')renderGateLogs('real-decision-gate-logs',(data.decision_gate||{}).logs);
-    if(typeof renderMovingAverage==='function')renderMovingAverage('real',data.moving_average);
+    if(typeof renderMovingAverage==='function')renderMovingAverage('real',data.moving_average);renderConsecutive('real',data);
     controls();
   }
   async function refresh(){if(busy)return;try{show(await api('status'));}catch(error){get('real-message').textContent=error.message;current=null;show(null);controls();}}
@@ -97,7 +98,7 @@
   get('real-buy-toggle').addEventListener('click',()=>perform('control/'+(current?.buy_halted?'resume_buys':'pause_buys'),{}));
   get('real-ack').addEventListener('change',controls);form.addEventListener('input',()=>{dirty=true;controls();});
   form.addEventListener('submit',async event=>{
-    event.preventDefault();if(busy)return;const payload=Object.fromEntries(new FormData(form));for(const name of ['short_window','long_window','dca_interval_hours','dca_offset_minutes'])payload[name]=Number(payload[name]);for(const name of ['max_exposure','daily_loss_limit','target_exposure','rebalance_tolerance'])payload[name]=(Number(payload[name])/100).toFixed(8);
+    event.preventDefault();if(busy)return;const payload=Object.fromEntries(new FormData(form));for(const name of ['consecutive_seconds','consecutive_count','candle_minutes','short_window','long_window','dca_interval_hours','dca_offset_minutes'])payload[name]=Number(payload[name]);for(const name of ['max_exposure','daily_loss_limit','target_exposure','rebalance_tolerance','consecutive_entry_return','consecutive_take_profit','consecutive_stop_loss'])payload[name]=(Number(payload[name])/100).toFixed(8);
     busy=true;controls();try{const data=await api('settings',payload);dirty=false;show(data);get('real-settings-message').textContent='실거래 설정을 저장했습니다. 주문 테스트를 다시 실행하세요.';}catch(error){get('real-settings-message').textContent=error.message;}finally{busy=false;await refresh();}
   });
   gateForm.addEventListener('input',()=>{gateDirty=true;controls();get('real-decision-gate-message').textContent='저장하지 않은 변경 사항이 있습니다.';});
@@ -128,3 +129,5 @@
   });
   refresh();setInterval(refresh,5000);
 })();
+
+(() => {const form=document.getElementById('real-settings');form.elements.strategy.addEventListener('change',()=>{updateStrategyFields(form);});})();

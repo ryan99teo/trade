@@ -193,6 +193,25 @@ class DecisionGateEngineTests(unittest.TestCase):
         self.assertEqual(len(self.store.recent("fills")), 1)
         self.assertNotIn("디시젼 게이트", self.store.recent("decisions")[0]["reason"])
 
+    def test_hold_still_logs_advisory_jev(self):
+        gate = MagicMock()
+        gate.evaluate.return_value = GateVerdict(proceed=True, noul=0.88, detail="ok")
+        engine = Engine(self.settings, self.store, decision_gate=gate)
+        flat = snapshot(prices=(100, 100, 100, 100))
+        engine.process(flat, NOW)
+        engine.control("start", NOW)
+        engine.process(flat, NOW)
+        self.assertEqual(len(self.store.recent("fills")), 0)
+        decision = self.store.recent("decisions")[0]
+        self.assertEqual(decision["action"], "hold")
+        self.assertIn("디시젼 참고", decision["reason"])
+        self.assertIn("0.88", decision["reason"])
+        self.assertEqual(gate.evaluate.call_args.args[1], "hold")
+        row = json.loads(log_path(self.settings).read_text(encoding="utf-8").strip().splitlines()[-1])
+        self.assertEqual(row["side"], "hold")
+        self.assertEqual(row["noul"], 0.88)
+        self.assertEqual(row["final_action"], "hold")
+
     def test_settings_ui_persists_gate_without_exposing_key(self):
         engine = Engine(self.settings, self.store)
         engine.configure({

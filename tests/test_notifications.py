@@ -149,3 +149,25 @@ class NotificationTests(unittest.TestCase):
         with TestClient(create_app(self.settings,FakeMarket(),telegram=Telegram())) as client:
             self.assertFalse(client.get("/api/notifications").json()["enabled"])
             self.assertEqual(client.post("/api/notifications/test",json={}).status_code,409)
+
+    def test_ui_settings_persist_without_exposing_secrets(self):
+        telegram=Telegram()
+        with TestClient(create_app(self.settings,FakeMarket(),telegram=telegram)) as client:
+            missing=client.post("/api/notifications/settings",json={"enabled":True})
+            self.assertEqual(missing.status_code,409)
+            saved=client.post("/api/notifications/settings",json={
+                "enabled":True,"bot_token":"ui-bot-token","chat_id":"ui-chat-id"})
+            self.assertEqual(saved.status_code,200,saved.text)
+            body=saved.json()
+            self.assertTrue(body["enabled"])
+            self.assertTrue(body["keys_set"])
+            self.assertNotIn("ui-bot-token",saved.text)
+            self.assertNotIn("ui-chat-id",saved.text)
+            kept=client.post("/api/notifications/settings",json={"enabled":True})
+            self.assertEqual(kept.status_code,200)
+            self.assertTrue(telegram.enabled)
+            self.assertEqual(telegram._token,"ui-bot-token")
+            cleared=client.post("/api/notifications/settings",json={"enabled":False})
+            self.assertEqual(cleared.status_code,200)
+            self.assertFalse(cleared.json()["enabled"])
+            self.assertFalse(telegram.enabled)
